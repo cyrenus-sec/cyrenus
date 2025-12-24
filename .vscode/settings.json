@@ -1,0 +1,27 @@
+{
+    "files.associations": {
+        "inet.h": "c",
+        "microhttpd.h": "c",
+        "ip.h": "c",
+        "json.h": "c",
+        "config_handler.h": "c",
+        "stdlib.h": "c",
+        "http_server.h": "c",
+        "string.h": "c",
+        "types.h": "c",
+        "bpf_loader.h": "c",
+        "libbpf.h": "c",
+        "common.h": "c",
+        "if_ether.h": "c",
+        "ioctl.h": "c",
+        "if.h": "c",
+        "if_link.h": "c",
+        "stdint.h": "c",
+        "bpf_endian.h": "c",
+        "attack_info.h": "c",
+        "uuid.h": "c",
+        "time.h": "c",
+        "stdio.h": "c",
+        "in.h": "c"
+    }
+}
