@@ -141,7 +141,7 @@ download_binaries() {
     
     # Extract
     echo "Extracting files..."
-    tar -xzf cyrenus.tar.gz
+    tar -xzf cyrenus.tar.gz --strip-components=1
     
     echo -e "${GREEN}✓ Files extracted${NC}"
 }
