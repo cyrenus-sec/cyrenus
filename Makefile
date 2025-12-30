@@ -1,10 +1,22 @@
 # Compiler for user-space programs
 CC = gcc
 CFLAGS = -I./include -I/usr/include/bpf -I/usr/include/json-c -Wall -Werror
+# Detect architecture
+ARCH := $(shell uname -m)
+ifeq ($(ARCH),x86_64)
+    BPF_ARCH := x86
+    RELEASE_ARCH := amd64
+else ifneq ($(filter aarch64 arm64,$(ARCH)),)
+    BPF_ARCH := arm64
+    RELEASE_ARCH := arm64
+else
+    BPF_ARCH := $(ARCH)
+    RELEASE_ARCH := $(ARCH)
+endif
+
 # Compiler for eBPF programs
 CLANG = clang
-BPF_CFLAGS = -target bpf -I./include -I/usr/include/bpf -Wall -O2 -D__TARGET_ARCH_x86 -I/usr/include/x86_64-linux-gnu -g
-
+BPF_CFLAGS = -target bpf -I./include -I/usr/include/bpf -Wall -O2 -D__TARGET_ARCH_$(BPF_ARCH) -I/usr/include/$(shell uname -m)-linux-gnu -g
 
 # Linker flags for user-space programs
 LDFLAGS = -lbpf -lelf -lz -lcurl -lpthread -lmicrohttpd -lconfig -ljson-c -luuid -lcrypto -lwebsockets -lsqlcipher -lmaxminddb
@@ -52,7 +64,7 @@ uninstall:
 
 # Create release tarball for distribution
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "v1.0.0")
-RELEASE_NAME = cyrenus-$(VERSION)-linux-amd64
+RELEASE_NAME = cyrenus-$(VERSION)-linux-$(RELEASE_ARCH)
 
 release: $(KERNEL_OBJ) $(USER_OBJ)
 	@echo "Creating release package: $(RELEASE_NAME)"
