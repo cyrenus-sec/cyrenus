@@ -1,4 +1,5 @@
 # Cyrenus
+In the name of God, the Most Gracious, the Most Merciful
 
 ![Cyrenus CE](readme.png)
 
@@ -12,18 +13,13 @@ Choose the installation method that best fits your needs:
 
 ### Option 1: Quick Install (Binary) - **Recommended** ⚡
 
-Fast installation using pre-built binaries. No compilation required!
+Run this command in your terminal to install Cyrenus instantly:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cyrenus-sec/cyrenus/main/install-binary.sh | sudo bash
 ```
 
-Or download and run:
-```bash
-wget https://raw.githubusercontent.com/cyrenus-sec/cyrenus/main/install-binary.sh
-sudo chmod +x install-binary.sh
-sudo ./install-binary.sh
-```
+Fast installation using pre-built binaries. No compilation required!
 
 **Supported Architectures:**
 - x86_64 (amd64)

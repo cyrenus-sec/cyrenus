@@ -1,5 +1,5 @@
 # Cyrenus
-بسم الله الرحمن الرحيم والصلاه علي رسوله الكريم 
+باسم الله الرحمان الرحيم
 
 ![Cyrenus CE](readme.png)
 
@@ -11,18 +11,13 @@ Cyrenus هو نظام عالي الأداء لمراقبة حركة مرور ا�
 
 ### الخيار 1: التثبيت السريع (ثنائي) - **مُوصى به** ⚡
 
-تثبيت سريع باستخدام ملفات ثنائية مُعدة مسبقاً. لا يتطلب عملية بناء!
+قم بتشغيل هذا الأمر في سطر الأوامر لتثبيت Cyrenus فوراً:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cyrenus-sec/cyrenus/main/install-binary.sh | sudo bash
 ```
 
-أو قم بالتنزيل والتشغيل:
-```bash
-wget https://raw.githubusercontent.com/cyrenus-sec/cyrenus/main/install-binary.sh
-sudo chmod +x install-binary.sh
-sudo ./install-binary.sh
-```
+تثبيت سريع باستخدام ملفات ثنائية مُعدة مسبقاً. لا يتطلب عملية بناء!
 
 **المعماريات المدعومة:**
 - x86_64 (amd64)
