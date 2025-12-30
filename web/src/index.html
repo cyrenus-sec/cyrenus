@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyrenus Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+</head>
+
+<body class="bg-brand-dark text-gray-200 font-sans antialiased h-screen overflow-hidden">
+    <div id="app" x-data="{ sidebarOpen: false, currentPage: 'dashboard' }" class="flex h-full">
+        <!-- Sidebar -->
+        <aside
+            class="w-64 bg-brand-light border-r border-gray-800 flex-shrink-0 hidden md:flex flex-col transition-all duration-300">
+            <div class="p-6 flex items-center justify-center border-b border-gray-800">
+                <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
+                    CYRENUS</h1>
+            </div>
+
+            <nav class="flex-1 overflow-y-auto py-4 px-3 space-y-1">
+                <a href="#" @click.prevent="currentPage = 'dashboard'"
+                    :class="currentPage === 'dashboard' ? 'bg-brand-accent text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
+                    class="flex items-center px-4 py-3 rounded-lg transition-colors group">
+                    <span class="mr-3">📊</span> Dashboard
+                </a>
+                <a href="#" @click.prevent="currentPage = 'traffic'"
+                    :class="currentPage === 'traffic' ? 'bg-brand-accent text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
+                    class="flex items-center px-4 py-3 rounded-lg transition-colors group">
+                    <span class="mr-3">🌍</span> Traffic
+                </a>
+                <a href="#" @click.prevent="currentPage = 'attacks'"
+                    :class="currentPage === 'attacks' ? 'bg-brand-accent text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
+                    class="flex items-center px-4 py-3 rounded-lg transition-colors group">
+                    <span class="mr-3">🛡️</span> Attacks
+                </a>
+                <a href="#" @click.prevent="currentPage = 'rules'"
+                    :class="currentPage === 'rules' ? 'bg-brand-accent text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
+                    class="flex items-center px-4 py-3 rounded-lg transition-colors group">
+                    <span class="mr-3">📝</span> Rules
+                </a>
+                <a href="#" @click.prevent="currentPage = 'settings'"
+                    :class="currentPage === 'settings' ? 'bg-brand-accent text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
+                    class="flex items-center px-4 py-3 rounded-lg transition-colors group">
+                    <span class="mr-3">⚙️</span> Settings
+                </a>
+                <a href="#" @click.prevent="currentPage = 'security'"
+                    :class="currentPage === 'security' ? 'bg-brand-accent text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
+                    class="flex items-center px-4 py-3 rounded-lg transition-colors group">
+                    <span class="mr-3">🚨</span> Security
+                </a>
+            </nav>
+
+            <div class="p-4 border-t border-gray-800">
+                <div class="flex items-center">
+                    <div
+                        class="h-8 w-8 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-xs font-bold">
+                        A</div>
+                    <div class="ml-3">
+                        <p class="text-sm font-medium text-white">Admin</p>
+                        <p class="text-xs text-green-400">Connected</p>
+                    </div>
+                </div>
+
+                <!-- Footer -->
+                <footer class="mt-12 border-t border-gray-800 pt-6 pb-2 text-center">
+                    <p class="text-gray-500 text-xs">
+                        Cyrenus Protection Engine v2.0 &bull;
+                        <a href="#" @click.prevent="sponsorshipModalOpen = true"
+                            class="text-cyan-500 hover:text-cyan-400 transition">Sponsor Project</a>
+                    </p>
+                </footer>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 flex flex-col min-w-0 overflow-hidden bg-brand-dark relative">
+            <header
+                class="h-16 flex items-center justify-between px-6 border-b border-gray-800 bg-brand-light/50 backdrop-blur-md">
+                <button @click="sidebarOpen = !sidebarOpen" class="md:hidden text-gray-400 hover:text-white">
+                    Menu
+                </button>
+                <div class="flex items-center space-x-4">
+                    <span class="h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
+                    <span class="text-sm text-gray-400 capitalize"
+                        x-text="'System Core Active | ' + currentPage"></span>
+                </div>
+            </header>
+
+            <div class="flex-1 overflow-y-auto p-6" x-data="dashboard_data">
+                <!-- Dashboard Page -->
+                <div x-show="currentPage === 'dashboard'" class="animate-fade-in">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                        <div
+                            class="bg-brand-light rounded-xl p-6 border border-gray-800 shadow-lg relative overflow-hidden group hover:border-cyan-500/30 transition-all">
+                            <h3 class="text-gray-400 text-sm font-medium uppercase tracking-wider">Current Load</h3>
+                            <div class="mt-2 flex items-baseline">
+                                <span class="text-3xl font-bold text-white" x-text="stats.pps">0</span>
+                                <span class="ml-2 text-sm text-gray-500">PPS</span>
+                            </div>
+                        </div>
+                        <div
+                            class="bg-brand-light rounded-xl p-6 border border-gray-800 shadow-lg relative overflow-hidden group hover:border-red-500/30 transition-all">
+                            <h3 class="text-gray-400 text-sm font-medium uppercase tracking-wider">Attacks Mitigated
+                            </h3>
+                            <div class="mt-2 flex items-baseline">
+                                <span class="text-3xl font-bold text-white" x-text="stats.attacks">0</span>
+                            </div>
+                        </div>
+                        <div
+                            class="bg-brand-light rounded-xl p-6 border border-gray-800 shadow-lg relative overflow-hidden group hover:border-purple-500/30 transition-all">
+                            <h3 class="text-gray-400 text-sm font-medium uppercase tracking-wider">Storage</h3>
+                            <div class="mt-2 flex items-baseline">
+                                <span class="text-3xl font-bold text-white">4.2 GB</span>
+                                <span class="ml-2 text-sm text-gray-500">Used</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-brand-light rounded-xl border border-gray-800 p-6 shadow-lg">
+                        <h3 class="text-lg font-bold text-white mb-4">Traffic Overview</h3>
+                        <div class="h-64 relative w-full">
+                            <canvas id="trafficChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Traffic Page -->
+                <div x-show="currentPage === 'traffic'" class="animate-fade-in" x-init="fetchTraffic()">
+                    <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                        <div class="p-6 border-b border-gray-800 flex justify-between items-center">
+                            <h3 class="text-lg font-bold text-white">Live Traffic Flows</h3>
+                            <button @click="fetchTraffic()"
+                                class="text-sm bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded transition">Refresh</button>
+                        </div>
+                        <table class="w-full text-left">
+                            <thead class="bg-gray-900/50 text-gray-400 text-xs uppercase tracking-wider">
+                                <tr>
+                                    <th class="px-6 py-4 font-medium">Source</th>
+                                    <th class="px-6 py-4 font-medium">Destination</th>
+                                    <th class="px-6 py-4 font-medium">Proto</th>
+                                    <th class="px-6 py-4 font-medium">Packets</th>
+                                    <th class="px-6 py-4 font-medium">Bytes</th>
+                                    <th class="px-6 py-4 font-medium text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-800">
+                                <template x-for="flow in paginatedTraffic"
+                                    :key="'f_' + flow.src_ip + flow.src_port + flow.dst_ip + flow.dst_port + flow.proto">
+                                    <tr class="hover:bg-gray-800/30 transition-colors text-sm">
+                                        <td class="px-6 py-4 font-mono">
+                                            <span class="text-cyan-400 font-medium" x-text="flow.src_ip"></span>
+                                            <span class="text-gray-500 text-xs" x-text="':' + flow.src_port"></span>
+                                        </td>
+                                        <td class="px-6 py-4 font-mono">
+                                            <span class="text-gray-300" x-text="flow.dst_ip"></span>
+                                            <span class="text-gray-500 text-xs" x-text="':' + flow.dst_port"></span>
+                                        </td>
+                                        <td class="px-6 py-4">
+                                            <span
+                                                class="bg-gray-800 text-gray-400 px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+                                                x-text="flow.proto === 6 ? 'TCP' : (flow.proto === 17 ? 'UDP' : (flow.proto === 1 ? 'ICMP' : flow.proto))"></span>
+                                        </td>
+                                        <td class="px-6 py-4 text-white" x-text="flow.packets"></td>
+                                        <td class="px-6 py-4 text-gray-400" x-text="formatBytes(flow.bytes)"></td>
+                                        <td class="px-6 py-4 text-right">
+                                            <button @click="blockIP(flow.src_ip)"
+                                                class="text-red-500 hover:text-red-400 text-xs font-bold uppercase border border-red-500/30 hover:border-red-500 px-2 py-1 rounded transition">Block
+                                                IP</button>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+
+                        <!-- Pagination Controls -->
+                        <div class="flex justify-between items-center px-6 py-4 border-t border-gray-800">
+                            <span class="text-sm text-gray-500">
+                                Showing <span x-text="(trafficPage - 1) * itemsPerPage + 1"></span> - <span
+                                    x-text="Math.min(trafficPage * itemsPerPage, traffic.length)"></span> of <span
+                                    x-text="traffic.length"></span> flows
+                            </span>
+                            <div class="flex space-x-2">
+                                <button @click="prevPage()" :disabled="trafficPage === 1"
+                                    :class="trafficPage === 1 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-700'"
+                                    class="bg-gray-800 text-white px-3 py-1 rounded transition text-sm">Prev</button>
+                                <span
+                                    class="bg-gray-800 text-cyan-500 px-3 py-1 rounded font-mono text-sm flex items-center"
+                                    x-text="trafficPage"></span>
+                                <button @click="nextPage()" :disabled="trafficPage >= totalPages()"
+                                    :class="trafficPage >= totalPages() ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-700'"
+                                    class="bg-gray-800 text-white px-3 py-1 rounded transition text-sm">Next</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Attacks Page -->
+                <div x-show="currentPage === 'attacks'" class="animate-fade-in" x-init="fetchAttacks()">
+                    <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                        <div class="p-6 border-b border-gray-800">
+                            <h3 class="text-lg font-bold text-white">Attack History</h3>
+                        </div>
+                        <table class="w-full text-left">
+                            <thead class="bg-gray-900/50 text-gray-400 text-xs uppercase tracking-wider">
+                                <tr>
+                                    <th class="px-6 py-4 font-medium">Time</th>
+                                    <th class="px-6 py-4 font-medium">Source</th>
+                                    <th class="px-6 py-4 font-medium">Type</th>
+                                    <th class="px-6 py-4 font-medium">Volume</th>
+                                    <th class="px-6 py-4 font-medium">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-800">
+                                <template x-for="attack in attacks" :key="attack.id">
+                                    <tr class="hover:bg-gray-800/30 transition-colors text-sm">
+                                        <td class="px-6 py-4 text-gray-400" x-text="attack.timestamp"></td>
+                                        <td class="px-6 py-4 font-mono text-red-400" x-text="attack.src_ip"></td>
+                                        <td class="px-6 py-4">
+                                            <span
+                                                class="bg-red-900/30 text-red-400 px-2 py-1 rounded-md text-xs font-bold uppercase tracking-tighter"
+                                                x-text="attack.protocol"></span>
+                                        </td>
+                                        <td class="px-6 py-4 text-white" x-text="attack.packets + ' pkts'"></td>
+                                        <td class="px-6 py-4">
+                                            <span class="text-green-500 flex items-center">
+                                                <span class="h-1.5 w-1.5 rounded-full bg-green-500 mr-2"></span>
+                                                Mitigated
+                                            </span>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Rules Page -->
+                <div x-show="currentPage === 'rules'" class="animate-fade-in" x-init="fetchRules()">
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <!-- Rule List -->
+                        <div
+                            class="lg:col-span-2 bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                            <div class="p-6 border-b border-gray-800">
+                                <h3 class="text-lg font-bold text-white">Firewall Rules</h3>
+                            </div>
+                            <table class="w-full text-left text-sm">
+                                <thead class="bg-gray-900/50 text-gray-400 text-xs uppercase tracking-wider">
+                                    <tr>
+                                        <th class="px-6 py-4 font-medium">IP Address</th>
+                                        <th class="px-6 py-4 font-medium">Port</th>
+                                        <th class="px-6 py-4 font-medium">Proto</th>
+                                        <th class="px-6 py-4 font-medium">Action</th>
+                                        <th class="px-6 py-4 font-medium text-right">Ops</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-800">
+                                    <template x-for="rule in rules" :key="rule.ip + rule.port + rule.proto">
+                                        <tr class="hover:bg-gray-800/30 transition-colors">
+                                            <td class="px-6 py-4 font-mono text-white" x-text="rule.ip"></td>
+                                            <td class="px-6 py-4 text-gray-300" x-text="rule.port"></td>
+                                            <td class="px-6 py-4 text-gray-400" x-text="rule.proto"></td>
+                                            <td class="px-6 py-4">
+                                                <span :class="rule.action === 1 ? 'text-red-400' : 'text-green-400'"
+                                                    x-text="rule.action === 1 ? 'DROP' : 'PASS'"></span>
+                                            </td>
+                                            <td class="px-6 py-4 text-right">
+                                                <button @click="deleteRule(rule)"
+                                                    class="text-red-500 hover:text-red-400 font-bold transition">×</button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Add Rule Form -->
+                        <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg p-6">
+                            <h3 class="text-lg font-bold text-white mb-6">Create New Rule</h3>
+                            <form @submit.prevent="addRule()" class="space-y-4">
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-500 uppercase mb-1">IP
+                                        Address</label>
+                                    <input type="text" x-model="newRule.ip" placeholder="0.0.0.0"
+                                        class="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500 transition-colors">
+                                </div>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Port</label>
+                                        <input type="number" x-model="newRule.port"
+                                            class="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500 transition-colors">
+                                    </div>
+                                    <div>
+                                        <label
+                                            class="block text-xs font-bold text-gray-500 uppercase mb-1">Protocol</label>
+                                        <select x-model="newRule.proto"
+                                            class="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500 transition-colors">
+                                            <option value="tcp">TCP</option>
+                                            <option value="udp">UDP</option>
+                                            <option value="icmp">ICMP</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Action</label>
+                                    <div class="flex space-x-2 mt-2">
+                                        <button type="button" @click="newRule.action = 'drop'"
+                                            :class="newRule.action === 'drop' ? 'bg-red-600 border-red-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400'"
+                                            class="flex-1 border py-2 rounded-lg font-bold transition">DROP</button>
+                                        <button type="button" @click="newRule.action = 'pass'"
+                                            :class="newRule.action === 'pass' ? 'bg-green-600 border-green-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400'"
+                                            class="flex-1 border py-2 rounded-lg font-bold transition">PASS</button>
+                                    </div>
+                                </div>
+                                <button type="submit"
+                                    class="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold py-3 rounded-lg shadow-lg shadow-cyan-500/20 transition-all transform active:scale-95">Deploy
+                                    Rule</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Security Page -->
+                <div x-show="currentPage === 'security'" class="animate-fade-in"
+                    x-init="fetchSecurityStats(); fetchSecurityEvents(); fetchSecurityPolicies()">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                        <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
+                            <h4 class="text-gray-500 text-xs font-bold uppercase">Total Events</h4>
+                            <p class="text-2xl font-bold text-white mt-1" x-text="security.stats.total_events">0</p>
+                        </div>
+                        <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
+                            <h4 class="text-gray-500 text-xs font-bold uppercase">Critical</h4>
+                            <p class="text-2xl font-bold text-red-500 mt-1" x-text="security.stats.critical_alerts">0
+                            </p>
+                        </div>
+                        <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
+                            <h4 class="text-gray-500 text-xs font-bold uppercase">Blocked</h4>
+                            <p class="text-2xl font-bold text-cyan-500 mt-1" x-text="security.stats.events_blocked">0
+                            </p>
+                        </div>
+                        <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
+                            <h4 class="text-gray-500 text-xs font-bold uppercase">Status</h4>
+                            <p class="text-sm font-bold mt-1"
+                                :class="security.stats.tetragon_running ? 'text-green-500' : 'text-red-500'"
+                                x-text="security.stats.tetragon_running ? 'RUNNING' : 'STOPPED'"></p>
+                        </div>
+                    </div>
+
+                    <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                        <div class="p-6 border-b border-gray-800 flex justify-between items-center bg-gray-900/40">
+                            <h3 class="text-lg font-bold text-white">Security Intelligence (Tetragon)</h3>
+                            <div class="flex gap-2">
+                                <select x-model="security.filters.severity" @change="fetchSecurityEvents()"
+                                    class="bg-brand-dark border border-gray-700 rounded px-2 py-1 text-xs text-white">
+                                    <option value="">All Severities</option>
+                                    <option value="4">Critical</option>
+                                    <option value="3">Error</option>
+                                    <option value="2">Warning</option>
+                                </select>
+                                <button @click="fetchSecurityEvents()"
+                                    class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1 rounded text-xs transition">Refresh</button>
+                            </div>
+                        </div>
+
+                        <div class="divide-y divide-gray-800 max-h-[600px] overflow-y-auto">
+                            <template x-for="event in security.events" :key="event.id">
+                                <div class="p-4 hover:bg-gray-800/20 transition-colors border-l-4" :class="{
+                                    'border-red-600 bg-red-900/5': event.severity >= 4,
+                                    'border-yellow-600 bg-yellow-900/5': event.severity == 3,
+                                    'border-cyan-600': event.severity < 3
+                                }">
+                                    <div class="flex justify-between items-start mb-2">
+                                        <div class="flex items-center gap-2">
+                                            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase" :class="{
+                                                'bg-red-600 text-white': event.severity >= 4,
+                                                'bg-yellow-600 text-white': event.severity == 3,
+                                                'bg-gray-700 text-gray-300': event.severity < 3
+                                            }"
+                                                x-text="event.severity >= 4 ? 'Critical' : (event.severity == 3 ? 'Error' : 'Warning')"></span>
+                                            <span x-show="event.action === 'Sigkill' || event.action === 'block'"
+                                                class="bg-cyan-900/50 text-cyan-400 border border-cyan-500/30 px-2 py-0.5 rounded text-[10px] font-bold uppercase">Blocked</span>
+                                            <span class="text-white font-mono text-sm font-bold"
+                                                x-text="event.binary_path || event.process_name"></span>
+                                        </div>
+                                        <span class="text-gray-500 text-[10px] font-mono"
+                                            x-text="new Date(event.timestamp / 1000000).toLocaleString()"></span>
+                                    </div>
+                                    <div class="text-xs text-gray-400 mb-2">
+                                        <span class="text-gray-500">PID:</span> <span class="text-gray-300"
+                                            x-text="event.pid"></span> |
+                                        <span class="text-gray-500">Policy:</span> <span class="text-gray-300"
+                                            x-text="event.policy_name || 'N/A'"></span>
+                                    </div>
+                                    <div x-show="event.command"
+                                        class="bg-black/40 p-2 rounded font-mono text-xs text-cyan-300/80 mt-1 border border-gray-800/50"
+                                        x-text="'$ ' + event.command"></div>
+                                </div>
+                            </template>
+                            <div x-show="security.events.length === 0" class="p-12 text-center text-gray-500">
+                                <p>No security events detected</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Page -->
+                <div x-show="currentPage === 'settings'" class="animate-fade-in" x-init="fetchSettings()">
+                    <div class="max-w-4xl mx-auto space-y-6">
+                        <!-- System Stats -->
+                        <div class="bg-brand-light rounded-xl p-6 border border-gray-800 shadow-lg">
+                            <h3 class="text-lg font-bold text-white mb-6">System Configuration</h3>
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-2">Protective
+                                        Interface</label>
+                                    <input type="text" :value="settings.interface" readonly
+                                        class="w-full bg-brand-dark/50 border border-gray-800 rounded-lg px-4 py-2 text-gray-300 font-mono text-sm cursor-not-allowed">
+                                </div>
+                                <!-- Add more settings here if needed -->
+                            </div>
+                        </div>
+
+                        <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg p-8">
+                            <h3 class="text-xl font-bold text-white mb-8">Feature Toggles</h3>
+
+                            <div class="space-y-6">
+                                <div
+                                    class="flex items-center justify-between p-4 bg-brand-dark/30 rounded-lg border border-gray-800">
+                                    <div>
+                                        <p class="text-white font-medium">GeoIP Protection</p>
+                                        <p class="text-xs text-gray-500"
+                                            x-text="settings.geoip_enabled ? 'Geo-fencing active' : 'Database not found - protection disabled'">
+                                        </p>
+                                    </div>
+                                    <div :class="settings.geoip_enabled ? 'bg-cyan-500/20 text-cyan-400' : 'bg-gray-500/20 text-gray-400'"
+                                        class="px-3 py-1 rounded-full text-xs font-bold"
+                                        x-text="settings.geoip_enabled ? 'ACTIVE' : 'INACTIVE'"></div>
+                                </div>
+
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <h4 class="text-white font-medium">Intrusion Prevention System</h4>
+                                        <p class="text-xs text-gray-500">Automatically block high-risk IPs and patterns.
+                                        </p>
+                                    </div>
+                                    <button @click="settings.ips_enabled = !settings.ips_enabled"
+                                        :class="settings.ips_enabled ? 'bg-cyan-600' : 'bg-gray-700'"
+                                        class="w-12 h-6 rounded-full relative transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500">
+                                        <span :class="settings.ips_enabled ? 'translate-x-6' : 'translate-x-1'"
+                                            class="absolute left-0 top-1 h-4 w-4 rounded-full bg-white shadow-md transform transition-transform"></span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="pt-6 border-t border-gray-800 mt-8">
+                                <button
+                                    class="bg-gray-800 hover:bg-gray-700 text-gray-200 font-bold px-6 py-2 rounded-lg transition">Apply
+                                    All Changes</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- API Access Management -->
+                    <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg p-8" x-init="fetchApiKeys()">
+                        <div class="flex justify-between items-center mb-6">
+                            <h3 class="text-xl font-bold text-white">API Access Management</h3>
+                        </div>
+
+                        <!-- Generator Form -->
+                        <div class="bg-gray-900/50 p-6 rounded-lg border border-gray-800 mb-8">
+                            <h4 class="text-gray-300 font-bold mb-4">Generate New API Key</h4>
+                            <div class="flex gap-4 items-end">
+                                <div class="flex-1">
+                                    <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Key Name</label>
+                                    <input type="text" x-model="newApiKey.name" placeholder="e.g. CI/CD Pipeline"
+                                        class="w-full bg-gray-900 border border-gray-800 rounded px-3 py-2 text-white text-sm focus:border-cyan-500 focus:outline-none">
+                                </div>
+                                <div class="w-32">
+                                    <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Expires
+                                        (Days)</label>
+                                    <input type="number" x-model.number="newApiKey.expires_in_days"
+                                        placeholder="0 (Never)"
+                                        class="w-full bg-gray-900 border border-gray-800 rounded px-3 py-2 text-white text-sm focus:border-cyan-500 focus:outline-none">
+                                </div>
+                                <button @click="createApiKey()"
+                                    class="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-4 py-2 rounded text-sm transition shadow-lg shadow-cyan-500/20">Generate
+                                    Key</button>
+                            </div>
+                        </div>
+
+                        <!-- Key List -->
+                        <table class="w-full text-left text-sm">
+                            <thead class="bg-gray-900/50 text-gray-400 text-xs uppercase tracking-wider">
+                                <tr>
+                                    <th class="px-4 py-3 font-medium">Name</th>
+                                    <th class="px-4 py-3 font-medium">Prefix</th>
+                                    <th class="px-4 py-3 font-medium">Expires</th>
+                                    <th class="px-4 py-3 font-medium text-right">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-800">
+                                <template x-for="key in apiKeys" :key="key.id">
+                                    <tr class="hover:bg-gray-800/30 transition-colors">
+                                        <td class="px-4 py-3 font-medium text-white" x-text="key.name"></td>
+                                        <td class="px-4 py-3 font-mono text-cyan-400 text-xs"
+                                            x-text="key.prefix + '...'"></td>
+                                        <td class="px-4 py-3 text-gray-400"
+                                            x-text="key.expires_at === 0 ? 'Never' : new Date(key.expires_at * 1000).toLocaleDateString()">
+                                        </td>
+                                        <td class="px-4 py-3 text-right">
+                                            <button @click="deleteApiKey(key.id)"
+                                                class="text-red-500 hover:text-red-400 font-bold text-xs uppercase transition">Revoke</button>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+
+                </div>
+
+                <!-- API Key Success Modal -->
+                <div x-show="generatedKey"
+                    class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+                    <div
+                        class="bg-brand-light border border-gray-700 rounded-xl shadow-2xl max-w-lg w-full p-8 relative">
+                        <h3 class="text-2xl font-bold text-white mb-2">API Key Generated</h3>
+                        <p class="text-gray-400 text-sm mb-6">Please copy this key immediately. You will not be able to
+                            see it again.</p>
+
+                        <div
+                            class="bg-gray-900/80 border border-gray-800 rounded-lg p-4 mb-6 flex items-center justify-between group">
+                            <code class="font-mono text-cyan-400 text-lg break-all select-all block mr-2"
+                                x-text="generatedKey"></code>
+                            <button @click="navigator.clipboard.writeText(generatedKey); $el.innerText = 'Copied!'"
+                                class="text-gray-500 hover:text-white text-xs font-bold uppercase transition">Copy</button>
+                        </div>
+
+                        <button @click="generatedKey = null"
+                            class="w-full bg-gray-800 hover:bg-gray-700 text-white font-bold py-3 rounded-lg transition">I
+                            have saved this key</button>
+                    </div>
+                </div>
+
+</html>

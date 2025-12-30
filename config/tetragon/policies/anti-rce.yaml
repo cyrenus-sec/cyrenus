@@ -1,0 +1,171 @@
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: anti-rce-protection
+spec:
+  options:
+  - name: "disable-kprobe-multi"
+    value: "1"
+  kprobes:
+  # 1. Detect web servers spawning shells (common RCE vector)
+  - call: "sys_execve"
+    syscall: true
+    args:
+    - index: 0
+      type: "string"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "/bin/sh"
+      matchActions:
+      - action: Sigkill
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "/bin/bash"
+      matchActions:
+      - action: Sigkill
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "/bin/dash"
+      matchActions:
+      - action: Sigkill
+      
+  # 2. Detect reverse shell patterns (bash/nc with network connections)
+  - call: "tcp_connect"
+    syscall: false
+    args:
+    - index: 0
+      type: "sock"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "NotDPort"
+        values:
+        - "22"
+        - "80"
+        - "443"
+      matchActions:
+      - action: Post
+      
+  # 3. Detect execution from temporary directories (fileless attacks)
+  - call: "sys_execve"
+    syscall: true
+    args:
+    - index: 0
+      type: "string"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Prefix"
+        values:
+        - "/tmp/"
+        - "/dev/shm/"
+        - "/var/tmp/"
+        - "/run/shm/"
+      matchActions:
+      - action: Sigkill
+      
+  # 4. Detect suspicious interpreters spawned by web processes
+  - call: "sys_execve"
+    syscall: true
+    args:
+    - index: 0
+      type: "string"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "/usr/bin/python3"
+      matchBinaries:
+      - operator: "In"
+        values:
+        - "/usr/sbin/nginx"
+        - "/usr/sbin/apache2"
+        - "/usr/bin/httpd"
+        - "/usr/bin/php-fpm"
+      matchActions:
+      - action: Post
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "/usr/bin/php"
+      matchBinaries:
+      - operator: "In"
+        values:
+        - "/usr/sbin/nginx"
+        - "/usr/sbin/apache2"
+      matchActions:
+      - action: Post
+      
+  # 5. Detect privilege escalation attempts
+  - call: "sys_setuid"
+    syscall: true
+    args:
+    - index: 0
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "0"
+      matchActions:
+      - action: Post
+      
+  # 6. Monitor common attack tools
+  - call: "sys_execve"
+    syscall: true
+    args:
+    - index: 0
+      type: "string"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "/usr/bin/nmap"
+      matchActions:
+      - action: Post
+      
+  # 7. Detect bind shell attempts (listening on unusual ports)
+  - call: "inet_listen"
+    syscall: false
+    return: false
+    args:
+    - index: 0
+      type: "sock"
+    selectors:
+    - matchBinaries:
+      - operator: "In"
+        values:
+        - "/bin/bash"
+        - "/bin/sh"
+        - "/usr/bin/nc"
+        - "/usr/bin/netcat"
+      matchActions:
+      - action: Post
+      
+  # 8. Monitor process injection via ptrace
+  - call: "sys_ptrace"
+    syscall: true
+    args:
+    - index: 0
+      type: "int"
+    - index: 1
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "16"
+      matchActions:
+      - action: Post

@@ -15,7 +15,7 @@ static struct bpf_object *obj;
 
  
 int load_bpf_program(const char *filename, const char *interface, uint32_t host_ip,
-                     int *map_fd_rules, int *map_fd_traffic, int *map_fd_host_ip , int *map_fd_udp_flood_fd ,  int *map_fd_dns_track_fd , int *map_fd_syn_flood_fd , int  *map_fd_attack_info_array, int *map_fd_attack_count) {
+                     int *map_fd_rules, int *map_fd_traffic, int *map_fd_host_ip , int *map_fd_udp_flood_fd ,  int *map_fd_dns_track_fd , int *map_fd_syn_flood_fd , int  *map_fd_attack_info_array, int *map_fd_attack_count, int *map_fd_geoip, int *map_fd_blocked_countries, int *map_fd_global_stats, int *map_fd_config) {
     struct bpf_object *obj;
     int prog_fd, ifindex;
    
@@ -112,9 +112,33 @@ int load_bpf_program(const char *filename, const char *interface, uint32_t host_
     }
  
 
- *map_fd_syn_flood_fd = bpf_object__find_map_fd_by_name(obj, "syn_flood_map");
+    *map_fd_syn_flood_fd = bpf_object__find_map_fd_by_name(obj, "syn_flood_map");
     if (*map_fd_syn_flood_fd < 0) {
         fprintf(stderr, "ERROR: finding 'syn_flood_map' map in object file '%s' failed\n", filename);
+        return -1;
+    }
+
+    *map_fd_geoip = bpf_object__find_map_fd_by_name(obj, "geoip_map");
+    if (*map_fd_geoip < 0) {
+        fprintf(stderr, "ERROR: finding 'geoip_map' map in object file '%s' failed\n", filename);
+        return -1;
+    }
+
+    *map_fd_blocked_countries = bpf_object__find_map_fd_by_name(obj, "blocked_countries");
+    if (*map_fd_blocked_countries < 0) {
+        fprintf(stderr, "ERROR: finding 'blocked_countries' map in object file '%s' failed\n", filename);
+        return -1;
+    }
+
+    *map_fd_global_stats = bpf_object__find_map_fd_by_name(obj, "global_stats");
+    if (*map_fd_global_stats < 0) {
+        fprintf(stderr, "ERROR: finding 'global_stats' map in object file '%s' failed\n", filename);
+        return -1;
+    }
+
+    *map_fd_config = bpf_object__find_map_fd_by_name(obj, "config_map");
+    if (*map_fd_config < 0) {
+        fprintf(stderr, "ERROR: finding 'config_map' map in object file '%s' failed\n", filename);
         return -1;
     }
 

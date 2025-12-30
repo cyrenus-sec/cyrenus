@@ -1,0 +1,19 @@
+{
+    "name": "cyrenus-web",
+    "version": "1.0.0",
+    "description": "Embedded frontend for Cyrenus",
+    "scripts": {
+        "build": "node esbuild.config.js && npx tailwindcss -i ./src/styles/main.css -o ./dist/styles.css --minify",
+        "watch": "node esbuild.config.js --watch"
+    },
+    "dependencies": {
+        "alpinejs": "^3.13.3",
+        "chart.js": "^4.4.1"
+    },
+    "devDependencies": {
+        "esbuild": "^0.19.11",
+        "tailwindcss": "^3.4.1",
+        "typescript": "^5.3.3",
+        "@types/alpinejs": "^3.13.10"
+    }
+}

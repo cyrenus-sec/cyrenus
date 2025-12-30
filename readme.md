@@ -44,6 +44,28 @@ Note: Root privileges are required to load the eBPF program.
 
 To stop the program, press Ctrl+C.
 
+## Tetragon Integration
+
+Cyrenus integrates with Tetragon for runtime security monitoring and anti-RCE protection.
+
+### Install Tetragon
+
+```bash
+sudo ./scripts/install_tetragon.sh
+sudo cp config/tetragon/policies/*.yaml /etc/tetragon/policies/
+sudo systemctl start tetragon
+sudo systemctl enable tetragon
+```
+
+### Features
+
+- **Anti-RCE Protection**: Detects and blocks remote code execution attempts
+- **Process Monitoring**: Tracks suspicious process behavior
+- **File Integrity Monitoring**: Monitors access to sensitive files
+- **Attack Correlation**: Links network and application-layer attacks
+
+See [docs/tetragon-integration.md](docs/tetragon-integration.md) for detailed documentation.
+
 ## License
 
 [Your chosen license]

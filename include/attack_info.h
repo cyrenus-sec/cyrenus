@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <time.h>
 #include <stdint.h>
+#include "common.h"
 
 #define MAX_ATTACKS 1000
 #define ATTACK_TYPE_MAX_LEN 64
@@ -16,15 +17,7 @@
 
  
 
-struct attack_info {
- uint64_t timestamp;
-    uint32_t src_ip;
-    uint8_t protocol;
-    char attack_type[ATTACK_TYPE_MAX_LEN];
-    uint32_t packets;
-    uint64_t bytes;
-    uint8_t padding[4];  // Ensure 8-byte alignment
-};
+// struct attack_info defined in common.h
 
 struct udp_flood_info {
     uint64_t last_update;

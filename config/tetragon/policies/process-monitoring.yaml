@@ -1,0 +1,158 @@
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: process-monitoring
+spec:
+  options:
+  - name: "disable-kprobe-multi"
+    value: "1"
+  kprobes:
+  # 1. Monitor all process executions
+  - call: "sys_execve"
+    syscall: true
+    args:
+    - index: 0
+      type: "string"
+    selectors:
+    - matchActions:
+      - action: Post
+        rateLimit: "1s"
+        rateLimitScope: "thread"
+  
+  # 2. Monitor process exits
+  - call: "do_exit"
+    syscall: false
+    args:
+    - index: 0
+      type: "int"
+    selectors:
+    - matchActions:
+      - action: Post
+        rateLimit: "1s"
+        rateLimitScope: "thread"
+  
+  # 3. Monitor SUID/SGID execution
+  - call: "sys_execve"
+    syscall: true
+    args:
+    - index: 0
+      type: "string"
+    selectors:
+    - matchCapabilities:
+      - type: "Effective"
+        operator: "In"
+        values:
+        - "CAP_SETUID"
+        - "CAP_SETGID"
+      matchActions:
+      - action: Post
+  
+  # 4. Monitor capability changes
+  - call: "commit_creds"
+    syscall: false
+    selectors:
+    - matchActions:
+      - action: Post
+        rateLimit: "2s"
+        rateLimitScope: "thread"
+  
+  # 5. Monitor namespace changes (container escapes)
+  - call: "sys_setns"
+    syscall: true
+    args:
+    - index: 0
+      type: "int"
+    - index: 1
+      type: "int"
+    selectors:
+    - matchActions:
+      - action: Post
+  
+  # 6. Monitor unshare (namespace creation)
+  - call: "sys_unshare"
+    syscall: true
+    args:
+    - index: 0
+      type: "int"
+    selectors:
+    - matchActions:
+      - action: Post
+  
+  # 7. Monitor process name changes (prctl PR_SET_NAME)
+  - call: "sys_prctl"
+    syscall: true
+    args:
+    - index: 0
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "15"
+      matchActions:
+      - action: Post
+  
+  # 8. Monitor fork bombs
+  - call: "sys_clone"
+    syscall: true
+    selectors:
+    - matchActions:
+      - action: Post
+        rateLimit: "1s"
+        rateLimitScope: "thread"
+  
+  # 9. Monitor core dumps (may indicate exploitation)
+  - call: "do_coredump"
+    syscall: false
+    selectors:
+    - matchActions:
+      - action: Post
+  
+  # 10. Monitor module loading (rootkit detection)
+  - call: "sys_init_module"
+    syscall: true
+    args:
+    - index: 0
+      type: "int"
+    - index: 1
+      type: "size_t"
+    - index: 2
+      type: "string"
+    selectors:
+    - matchActions:
+      - action: Post
+  
+  # 11. Monitor BPF program loading (detect malicious eBPF)
+  - call: "sys_bpf"
+    syscall: true
+    args:
+    - index: 0
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "5"
+      matchActions:
+      - action: Post
+  
+  # 12. Monitor process memory changes (mprotect)
+  - call: "sys_mprotect"
+    syscall: true
+    args:
+    - index: 0
+      type: "uint64"
+    - index: 1
+      type: "size_t"
+    - index: 2
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 2
+        operator: "Mask"
+        values:
+        - "4"
+      matchActions:
+      - action: Post

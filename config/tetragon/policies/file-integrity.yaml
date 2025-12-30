@@ -1,0 +1,287 @@
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: file-integrity-monitoring
+spec:
+  options:
+  - name: "disable-kprobe-multi"
+    value: "1"
+  kprobes:
+  # 1. Monitor writes to /etc (configuration files)
+  - call: "security_file_permission"
+    syscall: false
+    args:
+    - index: 0
+      type: "file"
+    - index: 1
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Prefix"
+        values:
+        - "/etc/"
+      - index: 1
+        operator: "Mask"
+        values:
+        - "2"
+      matchActions:
+      - action: Post
+
+  # 2. Monitor binary modifications
+  - call: "security_file_permission"
+    syscall: false
+    args:
+    - index: 0
+      type: "file"
+    - index: 1
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Prefix"
+        values:
+        - "/usr/bin/"
+        - "/usr/sbin/"
+        - "/bin/"
+        - "/sbin/"
+      - index: 1
+        operator: "Mask"
+        values:
+        - "2"
+      matchActions:
+      - action: Post
+
+  # 3. Monitor SSH key access
+  - call: "security_file_open"
+    syscall: false
+    args:
+    - index: 0
+      type: "file"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Postfix"
+        values:
+        - "/authorized_keys"
+        - "/id_rsa"
+        - "/id_ecdsa"
+        - "/id_ed25519"
+        - "/.ssh/config"
+      matchActions:
+      - action: Post
+
+  # 4. Monitor web directory writes (webshell detection)
+  - call: "security_file_permission"
+    syscall: false
+    args:
+    - index: 0
+      type: "file"
+    - index: 1
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Prefix"
+        values:
+        - "/var/www/"
+        - "/usr/share/nginx/"
+        - "/srv/http/"
+        - "/opt/webapp/"
+      - index: 1
+        operator: "Mask"
+        values:
+        - "2"
+      matchBinaries:
+      - operator: "NotIn"
+        values:
+        - "/usr/sbin/nginx"
+        - "/usr/sbin/apache2"
+        - "/usr/bin/php-fpm"
+        - "/usr/bin/rsync"
+        - "/usr/bin/git"
+        - "/usr/sbin/httpd"
+      matchActions:
+      - action: Post
+
+  # 5. Monitor /tmp directory script file creation (webshell detection)
+  - call: "security_file_permission"
+    syscall: false
+    args:
+    - index: 0
+      type: "file"
+    - index: 1
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Prefix"
+        values:
+        - "/tmp/"
+      - index: 1
+        operator: "Mask"
+        values:
+        - "2"
+      - index: 0
+        operator: "Postfix"
+        values:
+        - ".php"
+        - ".sh"
+        - ".py"
+        - ".pl"
+        - ".rb"
+      matchActions:
+      - action: Post
+    - matchArgs:
+      - index: 0
+        operator: "Prefix"
+        values:
+        - "/dev/shm/"
+      - index: 1
+        operator: "Mask"
+        values:
+        - "2"
+      - index: 0
+        operator: "Postfix"
+        values:
+        - ".php"
+        - ".sh"
+        - ".py"
+        - ".pl"
+        - ".rb"
+      matchActions:
+      - action: Post
+    - matchArgs:
+      - index: 0
+        operator: "Prefix"
+        values:
+        - "/var/tmp/"
+      - index: 1
+        operator: "Mask"
+        values:
+        - "2"
+      - index: 0
+        operator: "Postfix"
+        values:
+        - ".php"
+        - ".sh"
+        - ".py"
+        - ".pl"
+        - ".rb"
+      matchActions:
+      - action: Post
+
+  # 6. Monitor sensitive log file access
+  - call: "security_file_open"
+    syscall: false
+    args:
+    - index: 0
+      type: "file"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "/var/log/auth.log"
+        - "/var/log/secure"
+        - "/var/log/syslog"
+      matchActions:
+      - action: Post
+    - matchArgs:
+      - index: 0
+        operator: "Prefix"
+        values:
+        - "/var/log/audit/"
+      matchActions:
+      - action: Post
+
+  # 7. Monitor cron file modifications
+  - call: "security_file_permission"
+    syscall: false
+    args:
+    - index: 0
+      type: "file"
+    - index: 1
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Prefix"
+        values:
+        - "/etc/cron"
+        - "/var/spool/cron"
+      - index: 1
+        operator: "Mask"
+        values:
+        - "2"
+      matchActions:
+      - action: Post
+
+  # 8. Monitor systemd service file changes
+  - call: "security_file_permission"
+    syscall: false
+    args:
+    - index: 0
+      type: "file"
+    - index: 1
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Prefix"
+        values:
+        - "/etc/systemd/system/"
+        - "/usr/lib/systemd/system/"
+        - "/lib/systemd/system/"
+      - index: 1
+        operator: "Mask"
+        values:
+        - "2"
+      matchActions:
+      - action: Post
+
+  # 9. Monitor passwd/shadow file access
+  - call: "security_file_open"
+    syscall: false
+    args:
+    - index: 0
+      type: "file"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "/etc/passwd"
+        - "/etc/shadow"
+      matchBinaries:
+      - operator: "NotIn"
+        values:
+        - "/usr/sbin/useradd"
+        - "/usr/sbin/usermod"
+        - "/usr/sbin/userdel"
+        - "/usr/bin/passwd"
+        - "/usr/sbin/groupadd"
+        - "/usr/sbin/groupmod"
+      matchActions:
+      - action: Post
+
+  # 10. Monitor LD_PRELOAD configuration
+  - call: "security_file_permission"
+    syscall: false
+    args:
+    - index: 0
+      type: "file"
+    - index: 1
+      type: "int"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values:
+        - "/etc/ld.so.preload"
+      - index: 1
+        operator: "Mask"
+        values:
+        - "2"
+      matchActions:
+      - action: Post

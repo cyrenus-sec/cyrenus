@@ -1,10 +1,10 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-#ifdef __KERNEL__
+#if defined(__KERNEL__) || defined(__bpf__)
 #include <linux/types.h>
 #else
-#include <stdint.h>
+#include <linux/types.h>
 #include <linux/if_ether.h>
 #include <net/if.h>
 #endif
@@ -30,57 +30,76 @@ struct session {
 
 struct rule_t {
   
-    uint16_t port_start;
-    uint16_t port_end;
-    uint8_t proto;
-    uint8_t action;
+    __u16 port_start;
+    __u16 port_end;
+    __u8 proto;
+    __u8 action;
 };
 
 
  
+struct geoip_key {
+    __u32 prefixlen;
+    __u32 ip;
+};
+
+struct global_stats_t {
+    __u64 total_packets;
+    __u64 total_bytes;
+};
+
 struct traffic_info_t {
-    uint32_t src_ip;
-    uint32_t dst_ip;
-    uint16_t src_port;
-    uint16_t dst_port;
-    uint64_t timestamp;
-    uint8_t direction;
-    uint32_t host_ip;
-    uint8_t proto;
-    uint64_t bytes;
-    uint32_t packets;
-    uint64_t flow_start_time;
-    uint64_t flow_end_time;
-    uint32_t fwd_packets;
-    uint32_t bwd_packets;
-    uint64_t fwd_bytes;
-    uint64_t bwd_bytes;
-    uint32_t fwd_header_length;
-    uint32_t bwd_header_length;
-    uint16_t min_packet_length;
-    uint16_t max_packet_length;
-    uint32_t fwd_packet_length_max;
-    uint32_t fwd_packet_length_min;
-    uint32_t fwd_packet_length_sum;
-    uint32_t bwd_packet_length_max;
-    uint32_t bwd_packet_length_min;
-    uint32_t bwd_packet_length_sum;
-    uint32_t iat_sum;
-    uint32_t fwd_iat_sum;
-    uint32_t bwd_iat_sum;
-    uint32_t fin_count;
-    uint32_t syn_count;
-    uint32_t rst_count;
-    uint32_t psh_count;
-    uint32_t ack_count;
-    uint32_t urg_count;
-    uint32_t cwe_count;
-    uint32_t ece_count;
+    __u32 src_ip;
+    __u32 dst_ip;
+    __u16 src_port;
+    __u16 dst_port;
+    __u64 timestamp;
+    __u8 direction;
+    __u32 host_ip;
+    __u8 proto;
+    __u64 bytes;
+    __u32 packets;
+    __u64 flow_start_time;
+    __u64 flow_end_time;
+    __u32 fwd_packets;
+    __u32 bwd_packets;
+    __u64 fwd_bytes;
+    __u64 bwd_bytes;
+    __u32 fwd_header_length;
+    __u32 bwd_header_length;
+    __u16 min_packet_length;
+    __u16 max_packet_length;
+    __u32 fwd_packet_length_max;
+    __u32 fwd_packet_length_min;
+    __u32 fwd_packet_length_sum;
+    __u32 bwd_packet_length_max;
+    __u32 bwd_packet_length_min;
+    __u32 bwd_packet_length_sum;
+    __u32 iat_sum;
+    __u32 fwd_iat_sum;
+    __u32 bwd_iat_sum;
+    __u32 fin_count;
+    __u32 syn_count;
+    __u32 rst_count;
+    __u32 psh_count;
+    __u32 ack_count;
+    __u32 urg_count;
+    __u32 cwe_count;
+    __u32 ece_count;
 };
 struct rule_key_t {
     __u32 ip;
     __u16 port;
     __u8 proto;
+};
+
+struct flow_key_t {
+    __u32 src_ip;
+    __u32 dst_ip;
+    __u16 src_port;
+    __u16 dst_port;
+    __u8 proto;
+    __u8 pad[3]; // Padding to ensure 4-byte alignment and no holes
 };
 // Action values for rules
 #define ACTION_PASS 0
@@ -99,5 +118,26 @@ struct rule_key_t {
 #define XDP_PASS 2
 #endif
 #endif
+
+
+struct attacks_config_t {
+    __u32 syn_flood_rate;
+    __u32 udp_flood_rate;
+    __u32 icmp_flood_rate;
+    __u32 dns_amp_rate;
+    __u32 max_frags;
+};
+
+#define ATTACK_TYPE_MAX_LEN 64
+
+struct attack_info {
+    __u64 timestamp;
+    __u32 src_ip;
+    __u8 protocol;
+    char attack_type[ATTACK_TYPE_MAX_LEN]; 
+    __u32 packets;
+    __u64 bytes;
+    __u8 padding[4];  // Ensure 8-byte alignment
+};
 
 #endif // COMMON_H

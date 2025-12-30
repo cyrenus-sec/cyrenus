@@ -9,7 +9,28 @@
 */
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 // Function to start the HTTP server
-struct MHD_Daemon* start_http_server(struct config* config, int rules_map_fd, int traffic_map_fd , int map_fd_udp_flood_fd ,  int map_fd_dns_track_fd , int map_fd_syn_flood_fd , int  map_fd_attack_info_array, int map_fd_attack_count);
+// Include necessary headers
+#include <microhttpd.h>
+#include "../include/runtime_config.h"
+#include "../include/database.h"
+
+// Function to start the HTTP server
+// Returns a pointer to the daemon on success, NULL on failure
+struct MHD_Daemon *start_http_server(
+    struct runtime_config *config,
+    struct database *db,
+    int map_fd_rules, 
+    int map_fd_traffic, 
+    int map_fd_udp_flood, 
+    int map_fd_dns_track,
+    int map_fd_syn_flood,
+    int map_fd_attack_info_array,
+    int map_fd_attack_count,
+    int map_fd_geoip,
+    int map_fd_blocked_countries,
+    int global_stats_fd,
+    int config_map_fd
+);
 
 // Function to stop the HTTP server
 void stop_http_server(struct MHD_Daemon* daemon);

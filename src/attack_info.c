@@ -64,19 +64,17 @@ int get_attack_info(struct attack_info **attacks, int map_fd_attack_info_array, 
     {
         struct attack_info ebpf_attack;
          if (bpf_map_lookup_elem(map_fd_attack_info_array, &next_key, &ebpf_attack) == 0) {
-             
-
-                 struct attack_info *attack = &(*attacks)[next_key];
-                attack->timestamp = ebpf_attack.timestamp;
-                attack->src_ip = ebpf_attack.src_ip;
-                attack->protocol = ebpf_attack.protocol;
-                attack->packets = ebpf_attack.packets;
-                attack->bytes = ebpf_attack.bytes;
+             if (ebpf_attack.packets > 0 && ebpf_attack.timestamp > 0) {
+                struct attack_info *attack = &(*attacks)[attack_count];
+                memcpy(attack, &ebpf_attack, sizeof(struct attack_info));
 
                 char ip_str[INET_ADDRSTRLEN];
                 inet_ntop(AF_INET, &(attack->src_ip), ip_str, INET_ADDRSTRLEN);
                 fprintf(stderr, "Retrieved attack from IP: %s\n", ip_str);
                 attack_count++;
+                
+                if (attack_count >= MAX_ATTACKS) break;
+            }
             }
 
            
@@ -243,10 +241,10 @@ void print_attack_info(struct attack_info *attack) {
     inet_ntop(AF_INET, &(attack->src_ip), src_ip_str, INET_ADDRSTRLEN);
     
     printf("Attack Type: %s\n", attack->attack_type);
-    printf("Timestamp: %lu\n", attack->timestamp);
+    printf("Timestamp: %llu\n", attack->timestamp);
     printf("Source IP: %s\n", src_ip_str);
     printf("Protocol: %s\n", get_proto_name(attack->protocol));
     printf("Packets: %u\n", attack->packets);
-    printf("Bytes: %lu\n", attack->bytes);
+    printf("Bytes: %llu\n", attack->bytes);
     printf("------------------------------\n");
 }

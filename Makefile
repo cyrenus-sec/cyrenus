@@ -7,20 +7,24 @@ BPF_CFLAGS = -target bpf -I./include -I/usr/include/bpf -Wall -O2 -D__TARGET_ARC
 
 
 # Linker flags for user-space programs
-LDFLAGS = -lbpf -lelf -lz -lcurl -lpthread -lmicrohttpd -lconfig -ljson-c -luuid -lcrypto
+LDFLAGS = -lbpf -lelf -lz -lcurl -lpthread -lmicrohttpd -lconfig -ljson-c -luuid -lcrypto -lwebsockets -lsqlcipher -lmaxminddb
 
 # Source files
 KERNEL_SRC = ebpf/xdp_prog.c
-USER_SRC = src/main.c src/http_server.c src/config_handler.c src/bpf_loader.c src/attack_info.c
+USER_SRC = src/main.c src/http_server.c src/config_handler.c src/bpf_loader.c src/attack_info.c src/runtime_config.c src/database.c src/geoip.c src/websocket_server.c src/tetragon_events.c \
+           src/api/auth.c src/api/system.c src/api/attacks.c src/api/traffic.c src/api/rules.c src/api/iplists.c src/api/geoip.c src/api/security.c src/api/api_helpers.c src/saas_uplink.c src/api/keys.c
 
 # Output files
 KERNEL_OBJ = build/xdp_prog.o
 USER_OBJ = build/cyrenus
 
 # Targets
-.PHONY: all clean
+.PHONY: all clean test frontend
 
-all: $(KERNEL_OBJ) $(USER_OBJ)
+all: frontend $(KERNEL_OBJ) $(USER_OBJ)
+
+frontend:
+	./web/build.sh
 
 $(KERNEL_OBJ): $(KERNEL_SRC)
 	@mkdir -p build
