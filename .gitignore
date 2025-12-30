@@ -5,13 +5,13 @@ dist/
 *.a
 *.so
 cyrenus
-web/dist/
-web/node_modules/
+web/dist
+web/node_modules
 # Logs and Databases
 *.log
 *.db
 *.sqlite
-
+.vscode
 # NodeJS
 node_modules/
 npm-debug.log
