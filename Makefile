@@ -49,3 +49,18 @@ install: $(KERNEL_OBJ) $(USER_OBJ)
 # Add a target to uninstall the program
 uninstall:
 	rm -f /usr/local/bin/cyrenus /usr/local/lib/cyrenus_xdp_prog.o
+
+# Create release tarball for distribution
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "v1.0.0")
+RELEASE_NAME = cyrenus-$(VERSION)-linux-amd64
+
+release: $(KERNEL_OBJ) $(USER_OBJ)
+	@echo "Creating release package: $(RELEASE_NAME)"
+	@mkdir -p releases/$(RELEASE_NAME)
+	@cp $(USER_OBJ) releases/$(RELEASE_NAME)/cyrenus
+	@cp $(KERNEL_OBJ) releases/$(RELEASE_NAME)/xdp_prog.o
+	@cd releases && tar -czf $(RELEASE_NAME).tar.gz $(RELEASE_NAME)/
+	@cd releases && sha256sum $(RELEASE_NAME).tar.gz > $(RELEASE_NAME).tar.gz.sha256
+	@rm -rf releases/$(RELEASE_NAME)
+	@echo "Release package created: releases/$(RELEASE_NAME).tar.gz"
+	@echo "SHA256: $$(cat releases/$(RELEASE_NAME).tar.gz.sha256)"

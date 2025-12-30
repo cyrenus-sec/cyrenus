@@ -3,6 +3,7 @@
 #include <string.h>
 #include <getopt.h>
 #include <unistd.h>
+#include <libconfig.h>
 #include "../include/runtime_config.h"
 #include "../include/config_handler.h"
 
@@ -14,11 +15,10 @@ void runtime_config_init(struct runtime_config *rc) {
     memset(rc, 0, sizeof(struct runtime_config));
     
     // Default paths
-    // Default paths
-    strncpy(rc->config_file_path, "config/cyrenus.conf", MAX_PATH_LEN - 1);
-    strncpy(rc->database_path, "cyrenus.db", MAX_PATH_LEN - 1);
-    strncpy(rc->geoip_db_path, "GeoLite2-Country.mmdb", MAX_PATH_LEN - 1);
-    strncpy(rc->master_key_path, "config/master.key", MAX_PATH_LEN - 1);
+    strncpy(rc->config_file_path, "/etc/cyrenus/cyrenus.conf", MAX_PATH_LEN - 1);
+    strncpy(rc->database_path, "/var/lib/cyrenus/cyrenus.db", MAX_PATH_LEN - 1);
+    strncpy(rc->geoip_db_path, "/var/lib/cyrenus/GeoLite2-Country.mmdb", MAX_PATH_LEN - 1);
+    strncpy(rc->master_key_path, "/etc/cyrenus/master.key", MAX_PATH_LEN - 1);
     strncpy(rc->environment, "production", 31);
     
     // Default settings
@@ -243,6 +243,32 @@ int runtime_config_load_file(struct runtime_config *rc) {
         
     if (strlen(file_cfg.password) > 0)
         strncpy(rc->password, file_cfg.password, MAX_STRING_LEN - 1);
+
+    // Load database path from config
+    config_t conf;
+    config_init(&conf);
+    if (config_read_file(&conf, rc->config_file_path)) {
+        const char *db_path = NULL;
+        const char *geoip_path = NULL;
+        
+        // Load database path
+        config_setting_t *database = config_lookup(&conf, "database");
+        if (database != NULL) {
+            if (config_setting_lookup_string(database, "path", &db_path)) {
+                strncpy(rc->database_path, db_path, MAX_PATH_LEN - 1);
+            }
+        }
+        
+        // Load GeoIP path
+        config_setting_t *geoip = config_lookup(&conf, "geoip");
+        if (geoip != NULL) {
+            if (config_setting_lookup_string(geoip, "database_path", &geoip_path)) {
+                strncpy(rc->geoip_db_path, geoip_path, MAX_PATH_LEN - 1);
+            }
+        }
+        
+        config_destroy(&conf);
+    }
 
     return 0;
 }

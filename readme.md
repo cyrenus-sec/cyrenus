@@ -8,22 +8,53 @@ Cyrenus is a high-performance eBPF-based network traffic monitoring and DDoS pro
 
 ## Installation
 
-### Option 1: Quick Install (Recommended)
+Choose the installation method that best fits your needs:
 
-The automated installer handles all dependencies, compilation, and Tetragon policy configuration.
+### Option 1: Quick Install (Binary) - **Recommended** ⚡
+
+Fast installation using pre-built binaries. No compilation required!
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cyrenus-sec/cyrenus/main/install-binary.sh | sudo bash
+```
+
+Or download and run:
+```bash
+wget https://raw.githubusercontent.com/cyrenus-sec/cyrenus/main/install-binary.sh
+sudo chmod +x install-binary.sh
+sudo ./install-binary.sh
+```
+
+**Supported Architectures:**
+- x86_64 (amd64)
+- ARM64 (aarch64)
+
+**Installation Time:** ~30 seconds
+
+---
+
+### Option 2: Build from Source
+
+For development or customization, build from source:
 
 ```bash
 sudo ./install.sh
 ```
 
-Supported Distributions:
-- Ubuntu/Debian
+This installs dependencies, builds Cyrenus, and configures everything automatically.
+
+**Supported Distributions:**
+- Ubuntu/Debian  
 - RHEL/CentOS/Fedora
 - Arch Linux
 
-### Option 2: Docker Container
+**Installation Time:** ~5-10 minutes
 
-Cyrenus can be run as a containerized application.
+---
+
+### Option 3: Docker Container
+
+Run Cyrenus in a container:
 
 **Build:**
 ```bash
@@ -39,18 +70,6 @@ docker run -d --name cyrenus \
   -v /sys/kernel/btf:/sys/kernel/btf:ro \
   cyrenus
 ```
-
-### Option 3: Manual Build
-
-1.  **Install Dependencies** (See `install.sh` for list per distro).
-2.  **Build:**
-    ```bash
-    make
-    ```
-3.  **Run:**
-    ```bash
-    sudo ./build/cyrenus -c config/cyrenus.conf
-    ```
 
 ## Post-Installation
 

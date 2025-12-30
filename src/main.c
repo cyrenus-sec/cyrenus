@@ -198,7 +198,7 @@ int main(int argc, char **argv) {
         map_fd_syn_flood, map_fd_attack_info_array, map_fd_attack_count, map_fd_geoip, map_fd_blocked_countries, map_fd_global_stats, map_fd_config;
 
     if (!config.dry_run) {
-        if (load_bpf_program("build/xdp_prog.o", config.interface, host_ip,
+        if (load_bpf_program("/usr/local/lib/cyrenus_xdp_prog.o", config.interface, host_ip,
                              &map_fd_rules, &map_fd_traffic, &map_fd_host_ip, 
                              &map_fd_udp_flood, &map_fd_dns_track, &map_fd_syn_flood, 
                              &map_fd_attack_info_array, &map_fd_attack_count,
