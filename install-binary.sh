@@ -170,22 +170,22 @@ configure_system() {
     ip -o link show | awk -F': ' '{print "  - " $2}'
     echo ""
     
-    read -p "Enter network interface to monitor [auto-detect]: " INTERFACE
+    read -p "Enter network interface to monitor [auto-detect]: " INTERFACE </dev/tty
     if [ -z "$INTERFACE" ]; then
         INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
         echo "Auto-detected: $INTERFACE"
     fi
     
-    read -p "Enter HTTP API port [8181]: " HTTP_PORT
+    read -p "Enter HTTP API port [8181]: " HTTP_PORT </dev/tty
     HTTP_PORT=${HTTP_PORT:-8181}
     
-    read -p "Enter admin username [admin]: " USERNAME
+    read -p "Enter admin username [admin]: " USERNAME </dev/tty
     USERNAME=${USERNAME:-admin}
     
     echo ""
-    read -s -p "Enter admin password: " PASSWORD
+    read -s -p "Enter admin password: " PASSWORD </dev/tty
     echo ""
-    read -s -p "Confirm admin password: " PASSWORD_CONFIRM
+    read -s -p "Confirm admin password: " PASSWORD_CONFIRM </dev/tty
     echo ""
     
     if [ "$PASSWORD" != "$PASSWORD_CONFIRM" ]; then
