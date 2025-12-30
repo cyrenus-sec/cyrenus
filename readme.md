@@ -1,8 +1,8 @@
 # Cyrenus
 
-
 ![Cyrenus CE](readme.png)
 
+**Languages:** [English](readme.md) | [العربية](readme.ar.md)
 
 Cyrenus is a high-performance eBPF-based network traffic monitoring and DDoS protection system, seamlessly integrated with Tetragon for runtime security.
 
