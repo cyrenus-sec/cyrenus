@@ -353,7 +353,7 @@ install_application() {
 [Unit]
 Description=Cyrenus DDoS Protection System
 After=network.target
-Documentation=https://github.com/yourusername/cyrenus
+Documentation=https://github.com/cyrenus-sec/cyrenus
 
 [Service]
 Type=simple
@@ -393,6 +393,52 @@ download_geoip() {
     else
         echo -e "${YELLOW}⚠ Failed to download GeoIP database${NC}"
         echo "You can download it manually from: https://dev.maxmind.com/geoip/geolite2-free-geolocation-data"
+    fi
+}
+
+# Manage Tetragon Policies
+manage_tetragon() {
+    echo -e "\n${BLUE}Checking Tetragon configuration...${NC}"
+
+    if command_exists tetra; then
+        echo -e "${GREEN}✓ Tetragon CLI (tetra) detected${NC}"
+        
+        read -p "Apply Cyrenus security policies to Tetragon? (y/n) [y]: " APPLY_POLICIES
+        APPLY_POLICIES=${APPLY_POLICIES:-y}
+        
+        if [[ "$APPLY_POLICIES" =~ ^[Yy] ]]; then
+            echo "Applying policies..."
+            POLICY_DIR="$(dirname "$0")/config/tetragon/policies"
+            if [ -d "$POLICY_DIR" ]; then
+                for policy in "$POLICY_DIR"/*.yaml; do
+                    if [ -f "$policy" ]; then
+                        echo "Applying $(basename "$policy")..."
+                        # Use tetra to add the policy
+                        # Note: 'tetra tracingpolicy add' adds a policy.
+                        # We use || true to avoid stopping if it fails (e.g. already exists with same name)
+                        tetra tracingpolicy add "$policy" 2>/dev/null || \
+                        echo -e "${YELLOW}⚠ Failed to add $(basename "$policy") (might already exist)${NC}"
+                    fi
+                done
+                echo -e "${GREEN}✓ Policies applied${NC}"
+            else
+                echo -e "${RED}✗ Policy directory not found at $POLICY_DIR${NC}"
+            fi
+        fi
+    else
+        echo -e "${YELLOW}⚠ Tetragon not detected.${NC}"
+        read -p "Do you want to install Tetragon now? (y/n) [y]: " INSTALL_TETRAGON
+        INSTALL_TETRAGON=${INSTALL_TETRAGON:-y}
+        
+        if [[ "$INSTALL_TETRAGON" =~ ^[Yy] ]]; then
+            echo "Installing Tetragon..."
+            # Basic standalone installation for amd64
+             curl -L https://github.com/cilium/tetragon/releases/latest/download/tetragon-amd64.tar.gz | tar -xz -C /usr/local/bin
+             # Install systemd service if not present (simplified, usually part of package)
+             # For now, we assume user might need to configure it manually if not using a package manager
+             echo -e "${GREEN}✓ Tetragon binary installed to /usr/local/bin${NC}"
+             echo -e "${YELLOW}Note: You may need to configure the systemd service manually or run 'tetragon' directly.${NC}"
+        fi
     fi
 }
 
@@ -482,7 +528,10 @@ main() {
     # Step 9: Download GeoIP database
     download_geoip
     
-    # Step 10: Print instructions
+    # Step 10: Manage Tetragon
+    manage_tetragon
+    
+    # Step 11: Print instructions
     print_instructions
 }
 

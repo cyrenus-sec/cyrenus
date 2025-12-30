@@ -1,0 +1,22 @@
+# Build artifacts
+build/
+dist/
+*.o
+*.a
+*.so
+cyrenus
+
+# Logs and Databases
+*.log
+*.db
+*.sqlite
+
+# NodeJS
+node_modules/
+npm-debug.log
+
+# VSCode
+.vscode/
+
+# System
+.DS_Store
