@@ -5,7 +5,8 @@ dist/
 *.a
 *.so
 cyrenus
-
+web/dist/
+web/node_modules/
 # Logs and Databases
 *.log
 *.db
