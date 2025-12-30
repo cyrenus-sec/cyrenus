@@ -24,3 +24,6 @@ npm-debug.log
 cyrenus.db
 attack.sh
 cyrenus.log
+/cyrenus.db
+/attack.sh
+/cyrenus.log
