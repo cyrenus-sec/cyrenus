@@ -17,7 +17,7 @@ node_modules/
 npm-debug.log
 
 # VSCode
-.vscode/
+.vscode
 
 # System
 .DS_Store
