@@ -21,3 +21,6 @@ npm-debug.log
 
 # System
 .DS_Store
+cyrenus.db
+attack.sh
+cyrenus.log

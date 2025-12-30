@@ -16,8 +16,7 @@ RUN apt-get update && apt-get install -y \
     libwebsockets-dev \
     libssl-dev \
     libsqlcipher-dev \
-    libmaxminddb-dev \
-    libhpdf-dev \
+    libsqlite3-dev \
     libmaxminddb-dev \
     libhpdf-dev \
     uuid-dev \
