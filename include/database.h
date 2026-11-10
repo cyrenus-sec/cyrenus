@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <time.h>
+#include <pthread.h>
 
 // Forward declare sqlite3 to avoid dependency in header
 typedef struct sqlite3 sqlite3;
@@ -21,6 +22,8 @@ struct database {
     char encryption_key[65];  // 64-char hex + null
     bool is_open;
     bool is_encrypted;
+    pthread_mutex_t mutex;
+    bool mutex_initialized;
 };
 
 // Attack record structure
@@ -28,11 +31,16 @@ struct attack_record {
     int64_t id;
     int64_t timestamp;
     char src_ip[46];  // IPv6 max length
-    char attack_type[32];
+    char attack_type[64];
+    char protocol[16];
     int severity;
     uint32_t packets;
     uint64_t bytes;
+    uint32_t dropped_packets;
+    uint64_t dropped_bytes;
+    uint32_t peak_pps;
     int duration;
+    bool blocked;
     char status[16];
     time_t created_at;
 };
@@ -55,6 +63,7 @@ struct traffic_record {
 // Firewall rule structure
 struct rule_record {
     int id;
+    char ip_address[46];
     uint16_t port_start;
     uint16_t port_end;
     uint8_t protocol;
@@ -165,10 +174,14 @@ int database_rollback_transaction(struct database *db);
 
 // Attack record operations
 int database_insert_attack(struct database *db, const struct attack_record *attack);
+int database_upsert_active_attack(struct database *db, const struct attack_record *attack);
+int database_finalize_stale_attacks(struct database *db, time_t active_cutoff_ts);
 int database_get_attack(struct database *db, int64_t id, struct attack_record *attack);
 int database_list_attacks(struct database *db, struct attack_record **attacks, int *count, int limit, int offset);
+int database_count_attacks(struct database *db, int *total_count);
 int database_get_attacks_history(struct database *db, struct attack_record **attacks, int *count, int limit);
 int database_update_attack_status(struct database *db, int64_t id, const char *status);
+int database_delete_all_attacks(struct database *db);
 int database_delete_old_attacks(struct database *db, time_t older_than);
 
 // Traffic record operations
@@ -184,10 +197,13 @@ int database_get_rule(struct database *db, int id, struct rule_record *rule);
 int database_list_rules(struct database *db, struct rule_record **rules, int *count);
 int database_update_rule(struct database *db, int id, const struct rule_record *rule);
 int database_delete_rule(struct database *db, int id);
+int database_delete_rule_by_tuple(struct database *db, const char *ip_address, uint16_t port, uint8_t protocol);
 int database_toggle_rule(struct database *db, int id, bool enabled);
 
 // IP list operations
 int database_insert_ip_list(struct database *db, const struct ip_list_record *entry);
+int database_insert_ip_list_ex(struct database *db, const struct ip_list_record *entry, int *new_id_out);
+int database_get_ip_list_by_id(struct database *db, int id, struct ip_list_record *entry);
 int database_delete_ip_list(struct database *db, int id);
 int database_list_whitelist(struct database *db, struct ip_list_record **entries, int *count);
 int database_list_blacklist(struct database *db, struct ip_list_record **entries, int *count);
@@ -196,6 +212,7 @@ int database_check_ip_in_list(struct database *db, const char *ip, const char *l
 // GeoIP rule operations
 int database_insert_geo_rule(struct database *db, const struct geo_rule_record *rule);
 int database_delete_geo_rule(struct database *db, int id);
+int database_delete_geo_rule_by_code(struct database *db, const char *country_code);
 int database_list_geo_rules(struct database *db, struct geo_rule_record **rules, int *count);
 int database_get_geo_action(struct database *db, const char *country_code, char *action);
 

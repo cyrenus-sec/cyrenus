@@ -28,42 +28,61 @@ struct connection_context {
 
 // MAX_PAYLOAD_SIZE is defined in http_server.h
 
-// --- Helper Functions ---
-
-static enum MHD_Result send_response_error(struct MHD_Connection *connection, int status_code, const char *message) {
-    char json[256];
-    snprintf(json, sizeof(json), "{\"error\":\"%s\"}", message);
-    
-    struct MHD_Response *response = MHD_create_response_from_buffer(strlen(json), (void*)json, MHD_RESPMEM_MUST_COPY);
-    MHD_add_response_header(response, "Content-Type", "application/json");
-    MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
-    
-    enum MHD_Result ret = MHD_queue_response(connection, status_code, response);
-    MHD_destroy_response(response);
-    return ret;
+// Helper: Reset BPF map FDs to -1
+static void reset_app_fds(void) {
+    app_fds.rules_fd = -1;
+    app_fds.traffic_fd = -1;
+    app_fds.udp_flood_fd = -1;
+    app_fds.dns_track_fd = -1;
+    app_fds.syn_flood_fd = -1;
+    app_fds.attack_info_array_fd = -1;
+    app_fds.attack_count_fd = -1;
+    app_fds.active_attacks_fd = -1;
+    app_fds.auto_block_fd = -1;
+    app_fds.ip_whitelist_fd = -1;
+    app_fds.ip_blacklist_fd = -1;
+    app_fds.geoip_map_fd = -1;
+    app_fds.blocked_countries_fd = -1;
+    app_fds.global_stats_fd = -1;
+    app_fds.config_map_fd = -1;
 }
+
+// --- Helper Functions ---
 
 static enum MHD_Result send_response_options(struct MHD_Connection *connection) {
     struct MHD_Response *response = MHD_create_response_from_buffer(0, "", MHD_RESPMEM_PERSISTENT);
     MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
     MHD_add_response_header(response, "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    MHD_add_response_header(response, "Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
-    
+    MHD_add_response_header(response, "Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, X-Requested-With");
+
     enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
     MHD_destroy_response(response);
     return ret;
 }
 
-static enum MHD_Result send_response_buffer(struct MHD_Connection *connection, 
-                                           const void *buffer, 
-                                           size_t size, 
+static enum MHD_Result send_response_buffer(struct MHD_Connection *connection,
+                                           const void *buffer,
+                                           size_t size,
                                            const char *content_type) {
     struct MHD_Response *rs = MHD_create_response_from_buffer(size, (void*)buffer, MHD_RESPMEM_PERSISTENT);
     MHD_add_response_header(rs, "Content-Type", content_type);
     MHD_add_response_header(rs, "Access-Control-Allow-Origin", "*");
-    
+    MHD_add_response_header(rs, "Cache-Control", "no-cache");
+
     enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, rs);
     MHD_destroy_response(rs);
+    return ret;
+}
+
+static enum MHD_Result queue_security_response(struct MHD_Connection *connection,
+                                               struct MHD_Response *response) {
+    if (!response) {
+        api_security_last_status(); // Reset thread-local status
+        return api_send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Error");
+    }
+    unsigned int status = (unsigned int)api_security_last_status();
+    enum MHD_Result ret = MHD_queue_response(connection, status, response);
+    MHD_destroy_response(response);
     return ret;
 }
 
@@ -126,41 +145,26 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
     }
     
     // --- Frontend Routing ---
-    
+
     if (strcmp(method, "GET") == 0) {
         if (strcmp(url, "/") == 0 || strcmp(url, "/index.html") == 0) {
-            return send_response_buffer(connection, index_html, index_html_len, "text/html");
+            return send_response_buffer(connection, index_html, index_html_len, "text/html; charset=utf-8");
         }
-        if (strcmp(url, "/login.html") == 0) {
-            return send_response_buffer(connection, login_html, login_html_len, "text/html");
+        if (strcmp(url, "/login.html") == 0 || strcmp(url, "/login") == 0) {
+            return send_response_buffer(connection, login_html, login_html_len, "text/html; charset=utf-8");
         }
         if (strcmp(url, "/app.js") == 0) {
-            return send_response_buffer(connection, app_js, app_js_len, "application/javascript");
+            return send_response_buffer(connection, app_js, app_js_len, "application/javascript; charset=utf-8");
         }
         if (strcmp(url, "/styles.css") == 0) {
-            return send_response_buffer(connection, styles_css, styles_css_len, "text/css");
+            return send_response_buffer(connection, styles_css, styles_css_len, "text/css; charset=utf-8");
         }
     }
-    
+
     // --- Authentication Check ---
-    
+
     const char *auth_header = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "Authorization");
-    // Reuse verify logic from auth module (exposed via verify handler or verify function in header)
-    // For now, calling api_auth_verify logic directly is cleaner if we expose a helper, 
-    // but here we can just use the handler if we wanted, or duplicate the verify logic slightly for efficiency/simplicity
-    // Let's use the verify handler logic conceptually but direct call
-    
-    // Ideally we should move verify_token to a shared util or use the one we had.
-    // Let's assume verify_token is needed here. 
-    // For this refactor, I will just call api_auth_verify if the client asks for it, 
-    // but for protecting OTHER routes, I need a check.
-    
-    // Re-implement simplified check here or call a helper from auth.c if exposed.
-    // Check if token exists in DB.
-    // For sake of modularity, let's keep the `verify_token` helper logic here or in common.
-    // But since `auth.c` has `create_session` and `verify_token` is somewhat internal logic,
-    // let's rely on the DB check.
-    
+
     // Check for API verification endpoint
     if (strcmp(url, "/api/v1/auth/verify") == 0 && strcmp(method, "GET") == 0) {
         return api_auth_verify(connection, &ctx->api_ctx, auth_header);
@@ -169,13 +173,12 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
     // Checking auth for protected routes
     int authenticated = 0;
     if (auth_header) {
-        // ... Bearer token logic ...
-         struct session_record session;
-         const char *token = auth_header;
-         if (strncmp(token, "Bearer ", 7) == 0) token += 7;
-         if (database_get_session(app_db, token, &session) == 0) {
-             if (time(NULL) < session.expires_at) authenticated = 1;
-         }
+        struct session_record session;
+        const char *token = auth_header;
+        if (strncmp(token, "Bearer ", 7) == 0) token += 7;
+        if (database_get_session(app_db, token, &session) == 0) {
+            if (time(NULL) < session.expires_at) authenticated = 1;
+        }
     }
 
     // Check X-API-Key if not authenticated yet
@@ -183,7 +186,7 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
         const char *api_key = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "X-API-Key");
         if (api_key) {
             char hash[65];
-            hash_api_key(api_key, hash); // Using exposed helper
+            hash_api_key(api_key, hash);
             struct api_key_record key_rec;
             if (database_validate_api_key(app_db, hash, &key_rec) == 0) {
                 authenticated = 1;
@@ -193,63 +196,87 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
     }
 
     if (!authenticated) {
-        return send_response_error(connection, MHD_HTTP_UNAUTHORIZED, "Unauthorized");
+        return api_send_error(connection, MHD_HTTP_UNAUTHORIZED, "Unauthorized");
     }
-    
+
     // --- Protected Routes ---
-    
+
     if (strcmp(url, "/api/v1/auth/logout") == 0 && strcmp(method, "POST") == 0) {
         return api_auth_logout(connection, &ctx->api_ctx, auth_header);
     }
-    
+
+    if (strcmp(url, "/api/v1/system/stats") == 0 && strcmp(method, "GET") == 0) {
+        return api_system_stats(connection, &ctx->api_ctx);
+    }
+
     if (strcmp(url, "/api/v1/system/settings") == 0) {
         if (strcmp(method, "GET") == 0) return api_system_get_settings(connection, &ctx->api_ctx);
         if (strcmp(method, "POST") == 0) return api_system_update_settings(connection, &ctx->api_ctx, ctx->data, ctx->size);
     }
-    
-    if (strcmp(url, "/api/v1/attacks") == 0 && strcmp(method, "GET") == 0) {
-        return api_attacks_list(connection, &ctx->api_ctx, NULL, NULL);
+
+    if (strcmp(url, "/api/v1/attacks") == 0) {
+        if (strcmp(method, "GET") == 0) return api_attacks_list(connection, &ctx->api_ctx, NULL, NULL);
+        if (strcmp(method, "DELETE") == 0) return api_attacks_clear(connection, &ctx->api_ctx);
     }
-    
-    if (strncmp(url, "/api/v1/attacks/", 16) == 0 && strcmp(method, "GET") == 0) {
-        int id = atoi(url + 16);
-        return api_attacks_get(connection, &ctx->api_ctx, id);
+
+    if (strncmp(url, "/api/v1/attacks/", 16) == 0) {
+        const char *sub = url + 16;
+        size_t sub_len = strlen(sub);
+        if (sub_len > 8 && strcmp(sub + sub_len - 8, "/resolve") == 0 && strcmp(method, "POST") == 0) {
+            char id_buf[64];
+            size_t id_len = sub_len - 8;
+            if (id_len == 0 || id_len >= sizeof(id_buf)) {
+                return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid attack ID");
+            }
+            memcpy(id_buf, sub, id_len);
+            id_buf[id_len] = '\0';
+            return api_attacks_resolve(connection, &ctx->api_ctx, id_buf);
+        }
+        if (strcmp(method, "GET") == 0) {
+            int id = atoi(sub);
+            return api_attacks_get(connection, &ctx->api_ctx, id);
+        }
     }
-    
+
+    if (strcmp(url, "/api/v1/blocks") == 0 && strcmp(method, "GET") == 0) {
+        return api_blocks_list(connection, &ctx->api_ctx);
+    }
+
+    if (strncmp(url, "/api/v1/blocks/", 15) == 0 && strcmp(method, "DELETE") == 0) {
+        return api_blocks_delete(connection, &ctx->api_ctx, url + 15);
+    }
+
     if (strcmp(url, "/api/v1/traffic/stats") == 0 && strcmp(method, "GET") == 0) {
         return api_traffic_stats(connection, &ctx->api_ctx);
     }
-    
+
     if (strcmp(url, "/api/v1/rules") == 0) {
         if (strcmp(method, "GET") == 0) return api_rules_list(connection, &ctx->api_ctx);
         if (strcmp(method, "POST") == 0) return api_rules_create(connection, &ctx->api_ctx, ctx->data, ctx->size);
     }
-    
+
     if (strncmp(url, "/api/v1/rules/", 14) == 0 && strcmp(method, "DELETE") == 0) {
-        // Extract ID (IP_PORT_PROTO)
         return api_rules_delete(connection, &ctx->api_ctx, url + 14);
     }
-    
-    if (strncmp(url, "/api/v1/iplists/", 16) == 0) {
-        if (strcmp(method, "GET") == 0) {
-            // /api/v1/iplists/whitelist
-            return api_iplists_get(connection, &ctx->api_ctx, url + 16);
-        }
-        if (strcmp(method, "DELETE") == 0) {
-            // /api/v1/iplists/:id
-             return api_iplists_delete(connection, &ctx->api_ctx, atoi(url + 16));
-        }
-    }
-    
+
     if (strcmp(url, "/api/v1/iplists") == 0 && strcmp(method, "POST") == 0) {
         return api_iplists_add(connection, &ctx->api_ctx, ctx->data, ctx->size);
     }
 
-    if (strncmp(url, "/api/v1/geoip/rules", 19) == 0) {
+    if (strncmp(url, "/api/v1/iplists/", 16) == 0) {
+        if (strcmp(method, "GET") == 0) {
+            return api_iplists_get(connection, &ctx->api_ctx, url + 16);
+        }
+        if (strcmp(method, "DELETE") == 0) {
+            return api_iplists_delete(connection, &ctx->api_ctx, atoi(url + 16));
+        }
+    }
+
+    if (strcmp(url, "/api/v1/geoip/rules") == 0) {
         if (strcmp(method, "GET") == 0) return api_geoip_list_rules(connection, &ctx->api_ctx);
         if (strcmp(method, "POST") == 0) return api_geoip_add_rule(connection, &ctx->api_ctx, ctx->data, ctx->size);
     }
-    
+
     if (strncmp(url, "/api/v1/geoip/rules/", 20) == 0 && strcmp(method, "DELETE") == 0) {
         return api_geoip_delete_rule(connection, &ctx->api_ctx, url + 20);
     }
@@ -257,7 +284,7 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
     if (strncmp(url, "/api/v1/geoip/lookup/", 21) == 0 && strcmp(method, "GET") == 0) {
         return api_geoip_lookup(connection, &ctx->api_ctx, url + 21);
     }
-    
+
     if (strcmp(url, "/api/v1/keys") == 0) {
         if (strcmp(method, "GET") == 0) return api_keys_list(connection, &ctx->api_ctx);
         if (strcmp(method, "POST") == 0) return api_keys_create(connection, &ctx->api_ctx, ctx->data, ctx->size);
@@ -266,29 +293,17 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
 
     // Security/Tetragon routes
     if (strcmp(url, "/api/v1/security/events") == 0 && strcmp(method, "GET") == 0) {
-        struct MHD_Response *response = api_security_events_list(connection, method, url);
-        if (!response) return send_response_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Error");
-        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-        MHD_destroy_response(response);
-        return ret;
+        return queue_security_response(connection, api_security_events_list(connection, method, url));
     }
-    
+
     if (strcmp(url, "/api/v1/security/stats") == 0 && strcmp(method, "GET") == 0) {
-        struct MHD_Response *response = api_security_stats(connection, method, url);
-        if (!response) return send_response_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Error");
-        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-        MHD_destroy_response(response);
-        return ret;
+        return queue_security_response(connection, api_security_stats(connection, method, url));
     }
-    
+
     if (strcmp(url, "/api/v1/security/policies") == 0 && strcmp(method, "GET") == 0) {
-        struct MHD_Response *response = api_security_policies_list(connection, method, url);
-        if (!response) return send_response_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Error");
-        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-        MHD_destroy_response(response);
-        return ret;
+        return queue_security_response(connection, api_security_policies_list(connection, method, url));
     }
-    
+
     if (strncmp(url, "/api/v1/security/policy/", 24) == 0) {
         const char *policy_name = url + 24;
         const char *deploy_suffix = strstr(policy_name, "/deploy");
@@ -298,16 +313,12 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
             char name[256];
             size_t name_len = (size_t)(deploy_suffix - policy_name);
             if (name_len == 0 || name_len >= sizeof(name)) {
-                return send_response_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid policy name");
+                return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid policy name");
             }
             memcpy(name, policy_name, name_len);
             name[name_len] = '\0';
             if (strcmp(method, "POST") == 0) {
-                struct MHD_Response *response = api_security_policy_deploy(connection, method, name);
-                if (!response) return send_response_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Error");
-                enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-                MHD_destroy_response(response);
-                return ret;
+                return queue_security_response(connection, api_security_policy_deploy(connection, method, name));
             }
         } else {
             struct MHD_Response *response = NULL;
@@ -317,42 +328,37 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
                 response = api_security_policy_save(connection, method, policy_name, ctx->data, ctx->size);
             } else if (strcmp(method, "DELETE") == 0) {
                 response = api_security_policy_delete(connection, method, policy_name);
+            } else {
+                return api_send_error(connection, MHD_HTTP_METHOD_NOT_ALLOWED, "Method not allowed");
             }
-            if (response) {
-                enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-                MHD_destroy_response(response);
-                return ret;
-            }
+            return queue_security_response(connection, response);
         }
     }
-    
+
     if (strcmp(url, "/api/v1/security/logs") == 0 && strcmp(method, "GET") == 0) {
-        struct MHD_Response *response = api_security_logs(connection, method, url);
-        if (!response) return send_response_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Error");
-        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-        MHD_destroy_response(response);
-        return ret;
+        return queue_security_response(connection, api_security_logs(connection, method, url));
     }
-    
+
     if (strcmp(url, "/api/v1/security/config") == 0) {
         struct MHD_Response *response = NULL;
         if (strcmp(method, "GET") == 0) {
             response = api_security_config_get(connection, method, url);
         } else if (strcmp(method, "POST") == 0) {
             response = api_security_config_save(connection, method, ctx->data, ctx->size);
+        } else {
+            return api_send_error(connection, MHD_HTTP_METHOD_NOT_ALLOWED, "Method not allowed");
         }
-        if (response) {
-            enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-            MHD_destroy_response(response);
-            return ret;
-        }
+        return queue_security_response(connection, response);
     }
 
-    return send_response_error(connection, MHD_HTTP_NOT_FOUND, "Not Found");
+    return api_send_error(connection, MHD_HTTP_NOT_FOUND, "Not Found");
 }
 
 static void request_completed(void *cls, struct MHD_Connection *connection,
                               void **con_cls, enum MHD_RequestTerminationCode toe) {
+    (void)cls;
+    (void)connection;
+    (void)toe;
     struct connection_context *ctx = *con_cls;
     if (ctx) {
         if (ctx->data) free(ctx->data);
@@ -366,33 +372,15 @@ static void request_completed(void *cls, struct MHD_Connection *connection,
 struct MHD_Daemon *start_http_server(
     struct runtime_config *config,
     struct database *db,
-    int rules_fd, 
-    int traffic_fd, 
-    int udp_flood_fd, 
-    int dns_track_fd,
-    int syn_flood_fd,
-    int attack_info_array_fd,
-    int attack_count_fd,
-    int geoip_map_fd,
-    int blocked_countries_fd,
-    int global_stats_fd,
-    int config_map_fd
+    const struct map_fds *fds
 ) {
     app_config = config;
     app_db = db;
-    
-    // Store FDs in global struct for handlers
-    app_fds.rules_fd = rules_fd;
-    app_fds.traffic_fd = traffic_fd;
-    app_fds.udp_flood_fd = udp_flood_fd;
-    app_fds.dns_track_fd = dns_track_fd;
-    app_fds.syn_flood_fd = syn_flood_fd;
-    app_fds.attack_info_array_fd = attack_info_array_fd;
-    app_fds.attack_count_fd = attack_count_fd;
-    app_fds.geoip_map_fd = geoip_map_fd;
-    app_fds.blocked_countries_fd = blocked_countries_fd;
-    app_fds.global_stats_fd = global_stats_fd;
-    app_fds.config_map_fd = config_map_fd;
+
+    reset_app_fds();
+    if (fds) {
+        app_fds = *fds;
+    }
 
     struct MHD_Daemon *daemon = MHD_start_daemon(
         MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,

@@ -1,48 +1,30 @@
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 #include "../../include/api_handlers.h"
 #include "../../include/geoip_helpers.h"
+#include "../../include/database.h"
 #include <json-c/json.h>
 #include <linux/bpf.h>
 #include <bpf/bpf.h>
 
-// Helper to get helper functions (usually defined in http_server.c or common_utils.c, but we need external ref here)
-// Actually, include/api_handlers.h doesn't define them. Let's assume they are available or reimplement simple json helpers.
-// Better: extern declarations.
-extern enum MHD_Result send_response_success(struct MHD_Connection *connection, const char *json_str);
-extern enum MHD_Result send_response_error(struct MHD_Connection *connection, int status_code, const char *message);
-
-// Temporary helper if not linked:
-// (Wait, send_response_error is static in http_server.c in previous steps... I need to make it non-static or expose it)
-// In Step 299, send_response_error was static in http_server.c. 
-// PROBLME: Modular handlers cannot call static functions in http_server.c.
-// SOLUTION: I should have exposed them or I must duplicate them / include a common helper.
-// For now, to suffice the linker, I will assume they are EXPOSED (i.e. I need to remove 'static' from http_server.c).
-// OR, I re-implement them here briefly to fix the build.
-// Given strict "don't duplicate" rule, I should expose them. 
-// BUT, to be fast and safe, I will use `http_server.c` as the source of truth.
-// Wait, `src/api/auth.c` and others probably used them?
-// Let's check `src/api/auth.c`.
-// If they are static in http_server.c, then api/auth.c must have its own copy or fail linking.
-// In Step 255 summary, "Helper Functions: Old send_response was replaced...".
-// Let's assume I need to implement simple response helpers here to be safe and self-contained for now, 
-// or I will fix http_server.c to remove static.
-// Let's check `src/http_server.c` again.
-
-static enum MHD_Result local_send_json(struct MHD_Connection *connection, int status, const char *json) {
-    struct MHD_Response *response = MHD_create_response_from_buffer(strlen(json), (void*)json, MHD_RESPMEM_MUST_COPY);
-    MHD_add_response_header(response, "Content-Type", "application/json");
-    enum MHD_Result ret = MHD_queue_response(connection, status, response);
-    MHD_destroy_response(response);
-    return ret;
+static int normalize_country_code(const char *in, char out[3]) {
+    if (!in || strlen(in) != 2) return -1;
+    if (!isalpha((unsigned char)in[0]) || !isalpha((unsigned char)in[1])) return -1;
+    out[0] = (char)toupper((unsigned char)in[0]);
+    out[1] = (char)toupper((unsigned char)in[1]);
+    out[2] = '\0';
+    return 0;
 }
 
-// Handler: GET /api/v1/geoip/:ip
-enum MHD_Result api_geoip_lookup(struct MHD_Connection *connection, 
+// Handler: GET /api/v1/geoip/lookup/:ip
+enum MHD_Result api_geoip_lookup(struct MHD_Connection *connection,
                                  struct api_context *ctx,
                                  const char *ip_str) {
-    
-    if (!ip_str) return local_send_json(connection, MHD_HTTP_BAD_REQUEST, "{\"error\":\"Missing IP\"}");
+    (void)ctx;
+    if (!ip_str || ip_str[0] == '\0') {
+        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Missing IP");
+    }
 
     struct geoip_info info;
     if (geoip_lookup(ip_str, &info) == 0) {
@@ -51,62 +33,128 @@ enum MHD_Result api_geoip_lookup(struct MHD_Connection *connection,
         json_object_object_add(json_info, "country_code", json_object_new_string(info.country_code));
         json_object_object_add(json_info, "country_name", json_object_new_string(info.country_name));
         json_object_object_add(json_info, "city", json_object_new_string(info.city));
-        
+
         const char *json_str = json_object_to_json_string(json_info);
-        enum MHD_Result ret = local_send_json(connection, MHD_HTTP_OK, json_str);
+        enum MHD_Result ret = api_send_json(connection, MHD_HTTP_OK, json_str);
         json_object_put(json_info);
         return ret;
     }
-    
-    return local_send_json(connection, MHD_HTTP_NOT_FOUND, "{\"error\":\"Not found\"}");
+
+    return api_send_error(connection, MHD_HTTP_NOT_FOUND, "GeoIP database unavailable or IP not found");
 }
 
 // Handler: GET /api/v1/geoip/rules
 enum MHD_Result api_geoip_list_rules(struct MHD_Connection *connection, struct api_context *ctx) {
-    // For MVP, returning empty list as iterating BPF hash map from user space requires bpf_map_get_next_key loop.
-    // We can implement that later.
-    return local_send_json(connection, MHD_HTTP_OK, "[]");
+    struct json_object *j_arr = json_object_new_array();
+
+    if (ctx && ctx->db && ctx->db->is_open) {
+        struct geo_rule_record *rules = NULL;
+        int count = 0;
+        if (database_list_geo_rules(ctx->db, &rules, &count) == 0 && rules) {
+            for (int i = 0; i < count; i++) {
+                struct json_object *obj = json_object_new_object();
+                json_object_object_add(obj, "id", json_object_new_int(rules[i].id));
+                json_object_object_add(obj, "country_code", json_object_new_string(rules[i].country_code));
+                json_object_object_add(obj, "action", json_object_new_string(rules[i].action[0] ? rules[i].action : "block"));
+                json_object_object_add(obj, "priority", json_object_new_int(rules[i].priority));
+                json_object_object_add(obj, "created_at", json_object_new_int64((int64_t)rules[i].created_at));
+                json_object_array_add(j_arr, obj);
+            }
+            database_free_geo_rule_list(rules, count);
+        }
+    } else if (ctx && ctx->fds && ctx->fds->blocked_countries_fd >= 0) {
+        uint16_t key = 0, next_key = 0;
+        uint8_t val = 0;
+        void *cur_key = NULL;
+        while (bpf_map_get_next_key(ctx->fds->blocked_countries_fd, cur_key, &next_key) == 0) {
+            if (bpf_map_lookup_elem(ctx->fds->blocked_countries_fd, &next_key, &val) == 0 && val == 1) {
+                char code[3] = {(char)((next_key >> 8) & 0xFF), (char)(next_key & 0xFF), '\0'};
+                struct json_object *obj = json_object_new_object();
+                json_object_object_add(obj, "country_code", json_object_new_string(code));
+                json_object_object_add(obj, "action", json_object_new_string("block"));
+                json_object_array_add(j_arr, obj);
+            }
+            key = next_key;
+            cur_key = &key;
+        }
+    }
+
+    const char *json_str = json_object_to_json_string(j_arr);
+    enum MHD_Result ret = api_send_json(connection, MHD_HTTP_OK, json_str);
+    json_object_put(j_arr);
+    return ret;
 }
 
 // Handler: POST /api/v1/geoip/rules
-enum MHD_Result api_geoip_add_rule(struct MHD_Connection *connection, struct api_context *ctx, const char *upload_data, size_t size) {
+enum MHD_Result api_geoip_add_rule(struct MHD_Connection *connection, struct api_context *ctx,
+                                   const char *upload_data, size_t size) {
+    if (!upload_data || size == 0) {
+        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Missing request body");
+    }
+
     struct json_object *root = json_tokener_parse(upload_data);
-    if (!root) return local_send_json(connection, MHD_HTTP_BAD_REQUEST, "{\"error\":\"Invalid JSON\"}");
-    
-    struct json_object *country_code_obj;
+    if (!root) {
+        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid JSON");
+    }
+
+    struct json_object *country_code_obj = NULL;
     if (!json_object_object_get_ex(root, "country_code", &country_code_obj)) {
         json_object_put(root);
-        return local_send_json(connection, MHD_HTTP_BAD_REQUEST, "{\"error\":\"Missing country_code\"}");
+        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Missing country_code");
     }
-    
-    const char *code_str = json_object_get_string(country_code_obj);
-    if (strlen(code_str) != 2) {
+
+    char code[3] = {0};
+    if (normalize_country_code(json_object_get_string(country_code_obj), code) != 0) {
         json_object_put(root);
-        return local_send_json(connection, MHD_HTTP_BAD_REQUEST, "{\"error\":\"Invalid country code\"}");
+        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid 2-letter ISO country code");
     }
-    
-    // Key is 2-char code packed into uint16
-    uint16_t key = (uint16_t)((code_str[0] << 8) | code_str[1]);
-    uint8_t value = 1; // DROP
-    
-    if (bpf_map_update_elem(ctx->fds->blocked_countries_fd, &key, &value, BPF_ANY) != 0) {
-        json_object_put(root);
-        return local_send_json(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "{\"error\":\"Failed to update BPF map\"}");
+
+    if (ctx && ctx->fds && ctx->fds->blocked_countries_fd >= 0) {
+        uint16_t key = (uint16_t)(((unsigned char)code[0] << 8) | (unsigned char)code[1]);
+        uint8_t value = 1; // DROP
+        if (bpf_map_update_elem(ctx->fds->blocked_countries_fd, &key, &value, BPF_ANY) != 0) {
+            json_object_put(root);
+            return api_send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Failed to update BPF GeoIP map");
+        }
     }
-    
+
+    if (ctx && ctx->db && ctx->db->is_open) {
+        struct geo_rule_record rec = {0};
+        snprintf(rec.country_code, sizeof(rec.country_code), "%s", code);
+        snprintf(rec.action, sizeof(rec.action), "block");
+        rec.priority = 1;
+        database_insert_geo_rule(ctx->db, &rec);
+    }
+
     json_object_put(root);
-    return local_send_json(connection, MHD_HTTP_OK, "{\"status\":\"blocked\"}");
+    return api_send_json(connection, MHD_HTTP_OK, "{\"status\":\"blocked\"}");
 }
 
-// Handler: DELETE /api/v1/geoip/rules/:id
-enum MHD_Result api_geoip_delete_rule(struct MHD_Connection *connection, struct api_context *ctx, const char *id_str) {
-    if (strlen(id_str) != 2) return local_send_json(connection, MHD_HTTP_BAD_REQUEST, "{\"error\":\"Invalid ID\"}");
-    
-    uint16_t key = (uint16_t)((id_str[0] << 8) | id_str[1]);
-    
-    if (bpf_map_delete_elem(ctx->fds->blocked_countries_fd, &key) != 0) {
-         return local_send_json(connection, MHD_HTTP_NOT_FOUND, "{\"error\":\"Rule not found\"}");
+// Handler: DELETE /api/v1/geoip/rules/:code
+enum MHD_Result api_geoip_delete_rule(struct MHD_Connection *connection, struct api_context *ctx,
+                                      const char *id_str) {
+    char code[3] = {0};
+    if (normalize_country_code(id_str, code) != 0) {
+        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid 2-letter ISO country code");
     }
-    
-    return local_send_json(connection, MHD_HTTP_OK, "{\"status\":\"unblocked\"}");
+
+    int deleted = 0;
+    if (ctx && ctx->fds && ctx->fds->blocked_countries_fd >= 0) {
+        uint16_t key = (uint16_t)(((unsigned char)code[0] << 8) | (unsigned char)code[1]);
+        if (bpf_map_delete_elem(ctx->fds->blocked_countries_fd, &key) == 0) {
+            deleted = 1;
+        }
+    }
+
+    if (ctx && ctx->db && ctx->db->is_open) {
+        if (database_delete_geo_rule_by_code(ctx->db, code) == 0) {
+            deleted = 1;
+        }
+    }
+
+    if (!deleted && ctx && ctx->fds && ctx->fds->blocked_countries_fd >= 0) {
+        return api_send_error(connection, MHD_HTTP_NOT_FOUND, "GeoIP rule not found");
+    }
+
+    return api_send_json(connection, MHD_HTTP_OK, "{\"status\":\"unblocked\"}");
 }

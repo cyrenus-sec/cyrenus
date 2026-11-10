@@ -23,20 +23,20 @@ static int secure_str_equals(const char *a, const char *b) {
 }
 
 // Helper: Create a new session
-static char* create_session(struct database *db, const char* username) {
+static char *create_session(struct database *db, const char *username) {
+    if (!db || !db->is_open || !username) return NULL;
     struct session_record session = {0};
-    
+
     uuid_t uuid;
     uuid_generate(uuid);
-    uuid_unparse(uuid, session.user_id); // In a real app we'd lookup user ID
-    
+    uuid_unparse(uuid, session.user_id);
+
     uuid_generate(uuid);
     uuid_unparse(uuid, session.session_id);
-    
+
     time_t now = time(NULL);
     session.expires_at = now + 3600; // 1 hour expiry
-    
-    // Generate secure token mixing CSPRNG random_bytes + context metadata
+
     unsigned char random_bytes[32];
     if (RAND_bytes(random_bytes, sizeof(random_bytes)) != 1) {
         return NULL;
@@ -65,136 +65,89 @@ static char* create_session(struct database *db, const char* username) {
         sprintf(session.token + (i * 2), "%02x", hash[i]);
     }
     session.token[64] = '\0';
-    
+
     if (database_insert_session(db, &session) != 0) {
         return NULL;
     }
-    
+
     return strdup(session.token);
 }
 
 // Handler: POST /api/v1/auth/login
-enum MHD_Result api_auth_login(struct MHD_Connection *connection, 
+enum MHD_Result api_auth_login(struct MHD_Connection *connection,
                                struct api_context *ctx,
                                const char *upload_data, size_t size) {
-    
-    struct MHD_Response *response;
-    enum MHD_Result ret;
-
     if (!upload_data || size == 0) {
-        const char *err = "{\"error\":\"Missing request body\"}";
-        response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
-        MHD_add_response_header(response, "Content-Type", "application/json");
-        ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
-        MHD_destroy_response(response);
-        return ret;
+        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Missing request body");
     }
-    
+
     json_object *root = json_tokener_parse(upload_data);
     if (!root) {
-        const char *err = "{\"error\":\"Invalid JSON\"}";
-        response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
-        MHD_add_response_header(response, "Content-Type", "application/json");
-        ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
-        MHD_destroy_response(response);
-        return ret;
+        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid JSON");
     }
-    
-    json_object *j_username, *j_password;
+
+    json_object *j_username = NULL, *j_password = NULL;
     if (!json_object_object_get_ex(root, "username", &j_username) ||
         !json_object_object_get_ex(root, "password", &j_password)) {
         json_object_put(root);
-        const char *err = "{\"error\":\"Missing credentials\"}";
-        response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
-        MHD_add_response_header(response, "Content-Type", "application/json");
-        ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
-        MHD_destroy_response(response);
-        return ret;
+        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Missing credentials");
     }
-    
+
     const char *username = json_object_get_string(j_username);
     const char *password = json_object_get_string(j_password);
-    
-    // Validate credentials in constant time against runtime config
+
+    enum MHD_Result ret;
     if (username && password && ctx && ctx->config &&
         secure_str_equals(username, ctx->config->username) &&
         secure_str_equals(password, ctx->config->password)) {
-        
+
         char *token = create_session(ctx->db, username);
         if (token) {
             json_object *resp_obj = json_object_new_object();
             json_object_object_add(resp_obj, "token", json_object_new_string(token));
             json_object_object_add(resp_obj, "expires_in", json_object_new_int(3600));
-            
+            json_object_object_add(resp_obj, "username", json_object_new_string(username));
+
             const char *json_str = json_object_to_json_string(resp_obj);
-            response = MHD_create_response_from_buffer(strlen(json_str), (void*)json_str, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(response, "Content-Type", "application/json");
-            ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-            
+            ret = api_send_json(connection, MHD_HTTP_OK, json_str);
+
             free(token);
             json_object_put(resp_obj);
         } else {
-            const char *err = "{\"error\":\"Session creation failed\"}";
-            response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(response, "Content-Type", "application/json");
-            ret = MHD_queue_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, response);
+            ret = api_send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Session creation failed");
         }
     } else {
-        const char *err = "{\"error\":\"Invalid credentials\"}";
-        response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
-        MHD_add_response_header(response, "Content-Type", "application/json");
-        ret = MHD_queue_response(connection, MHD_HTTP_UNAUTHORIZED, response);
+        ret = api_send_error(connection, MHD_HTTP_UNAUTHORIZED, "Invalid credentials");
     }
-    
+
     json_object_put(root);
-    MHD_destroy_response(response);
     return ret;
 }
 
 // Handler: GET /api/v1/auth/verify
-enum MHD_Result api_auth_verify(struct MHD_Connection *connection, 
+enum MHD_Result api_auth_verify(struct MHD_Connection *connection,
                                 struct api_context *ctx,
                                 const char *token) {
-    struct MHD_Response *response;
-    enum MHD_Result ret;
-    
     if (!token) {
-        const char *err = "{\"valid\":false}";
-        response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
-        MHD_add_response_header(response, "Content-Type", "application/json");
-        ret = MHD_queue_response(connection, MHD_HTTP_UNAUTHORIZED, response);
-        MHD_destroy_response(response);
-        return ret;
+        return api_send_json(connection, MHD_HTTP_UNAUTHORIZED, "{\"valid\":false}");
     }
-    
-    // Skip "Bearer " prefix if present
+
     if (strncmp(token, "Bearer ", 7) == 0) {
         token += 7;
     }
-    
+
     struct session_record session;
-    if (database_get_session(ctx->db, token, &session) == 0) {
-        // Check expiry
+    if (ctx && ctx->db && database_get_session(ctx->db, token, &session) == 0) {
         if (time(NULL) < session.expires_at) {
-            const char *succ = "{\"valid\":true}";
-            response = MHD_create_response_from_buffer(strlen(succ), (void*)succ, MHD_RESPMEM_MUST_COPY);
-            MHD_add_response_header(response, "Content-Type", "application/json");
-            ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-            MHD_destroy_response(response);
-            return ret;
+            return api_send_json(connection, MHD_HTTP_OK, "{\"valid\":true}");
         }
     }
-    
-    const char *err = "{\"valid\":false}";
-    response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
-    MHD_add_response_header(response, "Content-Type", "application/json");
-    ret = MHD_queue_response(connection, MHD_HTTP_UNAUTHORIZED, response);
-    MHD_destroy_response(response);
-    return ret;
+
+    return api_send_json(connection, MHD_HTTP_UNAUTHORIZED, "{\"valid\":false}");
 }
 
 // Handler: POST /api/v1/auth/logout
-enum MHD_Result api_auth_logout(struct MHD_Connection *connection, 
+enum MHD_Result api_auth_logout(struct MHD_Connection *connection,
                                 struct api_context *ctx,
                                 const char *token) {
     if (token && ctx && ctx->db) {
@@ -204,11 +157,5 @@ enum MHD_Result api_auth_logout(struct MHD_Connection *connection,
         database_delete_session(ctx->db, token);
     }
 
-    struct MHD_Response *response;
-    const char *msg = "{\"status\":\"logged out\"}";
-    response = MHD_create_response_from_buffer(strlen(msg), (void*)msg, MHD_RESPMEM_MUST_COPY);
-    MHD_add_response_header(response, "Content-Type", "application/json");
-    enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-    MHD_destroy_response(response);
-    return ret;
+    return api_send_json(connection, MHD_HTTP_OK, "{\"status\":\"logged out\"}");
 }

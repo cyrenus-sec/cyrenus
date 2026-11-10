@@ -7,19 +7,32 @@
 #include <linux/bpf.h>
 #include <bpf/bpf.h>
 #include "../include/geoip_helpers.h"
+#include "../include/common.h"
 
 static MMDB_s mmdb;
 static int db_open = 0;
 
+static void copy_mmdb_utf8(const MMDB_entry_data_s *data, char *dst, size_t dst_size) {
+    if (!dst || dst_size == 0) return;
+    dst[0] = '\0';
+    if (!data || !data->has_data || data->type != MMDB_DATA_TYPE_UTF8_STRING || !data->utf8_string) {
+        return;
+    }
+    size_t len = data->data_size < dst_size - 1 ? data->data_size : dst_size - 1;
+    memcpy(dst, data->utf8_string, len);
+    dst[len] = '\0';
+}
+
 int geoip_init(const char *db_path) {
-    if (db_open) return 0; // Already open
-    
+    if (!db_path || db_path[0] == '\0') return -1;
+    if (db_open) return 0;
+
     int status = MMDB_open(db_path, MMDB_MODE_MMAP, &mmdb);
     if (status != MMDB_SUCCESS) {
         fprintf(stderr, "Cannot open MMDB %s: %s\n", db_path, MMDB_strerror(status));
         return -1;
     }
-    
+
     db_open = 1;
     return 0;
 }
@@ -32,100 +45,138 @@ void geoip_cleanup() {
 }
 
 int geoip_lookup(const char *ip_str, struct geoip_info *info) {
-    if (!db_open) return -1;
-    
-    int gai_error, mmdb_error;
+    if (!db_open || !ip_str || !info) return -1;
+
+    int gai_error = 0, mmdb_error = 0;
     MMDB_lookup_result_s result = MMDB_lookup_string(&mmdb, ip_str, &gai_error, &mmdb_error);
-    
+
     if (gai_error != 0) {
         fprintf(stderr, "Error from getaddrinfo for %s - %s\n", ip_str, gai_strerror(gai_error));
         return -1;
     }
-    
+
     if (mmdb_error != MMDB_SUCCESS) {
         fprintf(stderr, "Got an error from libmaxminddb: %s\n", MMDB_strerror(mmdb_error));
         return -1;
     }
-    
-    MMDB_entry_data_s entry_data;
-    
-    if (result.found_entry) {
-        memset(info, 0, sizeof(struct geoip_info));
-        
-        // Country Code
-        int status = MMDB_get_value(&result.entry, &entry_data, "country", "iso_code", NULL);
-        if (status == MMDB_SUCCESS && entry_data.has_data) {
-            strncpy(info->country_code, entry_data.utf8_string, 2);
-            info->country_code[2] = '\0';
-        }
 
-        // Country Name
-        status = MMDB_get_value(&result.entry, &entry_data, "country", "names", "en", NULL);
-        if (status == MMDB_SUCCESS && entry_data.has_data) {
-            strncpy(info->country_name, entry_data.utf8_string, sizeof(info->country_name)-1);
-        }
-        
-        // City (if available)
-        status = MMDB_get_value(&result.entry, &entry_data, "city", "names", "en", NULL);
-        if (status == MMDB_SUCCESS && entry_data.has_data) {
-            strncpy(info->city, entry_data.utf8_string, sizeof(info->city)-1);
-        }
-        
-        return 0;
+    if (!result.found_entry) {
+        return -1;
     }
-    
-    return -1; // Not found
+
+    memset(info, 0, sizeof(struct geoip_info));
+    MMDB_entry_data_s entry_data;
+
+    if (MMDB_get_value(&result.entry, &entry_data, "country", "iso_code", NULL) == MMDB_SUCCESS) {
+        copy_mmdb_utf8(&entry_data, info->country_code, sizeof(info->country_code));
+    }
+
+    if (MMDB_get_value(&result.entry, &entry_data, "country", "names", "en", NULL) == MMDB_SUCCESS) {
+        copy_mmdb_utf8(&entry_data, info->country_name, sizeof(info->country_name));
+    }
+
+    if (MMDB_get_value(&result.entry, &entry_data, "city", "names", "en", NULL) == MMDB_SUCCESS) {
+        copy_mmdb_utf8(&entry_data, info->city, sizeof(info->city));
+    }
+
+    return 0;
+}
+
+struct geoip_walk_stats {
+    int map_fd;
+    uint64_t inserted;
+    uint64_t errors;
+};
+
+static void insert_geoip_cidr(struct geoip_walk_stats *st, uint32_t ip_host, uint32_t prefixlen, MMDB_entry_s *entry) {
+    MMDB_entry_data_s entry_data;
+    if (MMDB_get_value(entry, &entry_data, "country", "iso_code", NULL) != MMDB_SUCCESS ||
+        !entry_data.has_data ||
+        entry_data.type != MMDB_DATA_TYPE_UTF8_STRING ||
+        entry_data.data_size < 2) {
+        return;
+    }
+
+    uint16_t cc = (uint16_t)(((unsigned char)entry_data.utf8_string[0] << 8) |
+                             (unsigned char)entry_data.utf8_string[1]);
+
+    struct geoip_key key = {
+        .prefixlen = prefixlen,
+        .ip = htonl(ip_host)
+    };
+
+    if (bpf_map_update_elem(st->map_fd, &key, &cc, BPF_ANY) == 0) {
+        st->inserted++;
+    } else {
+        st->errors++;
+    }
+}
+
+static void walk_ipv4_tree(struct geoip_walk_stats *st, uint32_t node_num, uint32_t cur_ip, uint32_t depth) {
+    if (depth >= 32 || node_num >= mmdb.metadata.node_count) {
+        return;
+    }
+
+    MMDB_search_node_s node;
+    if (MMDB_read_node(&mmdb, node_num, &node) != MMDB_SUCCESS) {
+        st->errors++;
+        return;
+    }
+
+    uint32_t bit_mask = 1U << (31 - depth);
+    uint32_t next_prefixlen = depth + 1;
+
+    // Left branch (bit = 0)
+    if (node.left_record_type == MMDB_RECORD_TYPE_SEARCH_NODE) {
+        walk_ipv4_tree(st, (uint32_t)node.left_record, cur_ip, depth + 1);
+    } else if (node.left_record_type == MMDB_RECORD_TYPE_DATA) {
+        MMDB_entry_s entry = node.left_record_entry;
+        insert_geoip_cidr(st, cur_ip, next_prefixlen, &entry);
+    }
+
+    // Right branch (bit = 1)
+    uint32_t right_ip = cur_ip | bit_mask;
+    if (node.right_record_type == MMDB_RECORD_TYPE_SEARCH_NODE) {
+        walk_ipv4_tree(st, (uint32_t)node.right_record, right_ip, depth + 1);
+    } else if (node.right_record_type == MMDB_RECORD_TYPE_DATA) {
+        MMDB_entry_s entry = node.right_record_entry;
+        insert_geoip_cidr(st, right_ip, next_prefixlen, &entry);
+    }
 }
 
 int geoip_populate_bpf_map(int map_fd) {
-    if (!db_open) return -1;
-    
-    printf("Populating eBPF GeoIP map (this may take a few seconds)...\n");
-    
-    // Iterate over the database
-    // Note: iterating the entire tree can be complex. 
-    // libmaxminddb doesn't expose a simple "foreach CIDR" API easily without traversing the tree.
-    // However, it does provide MMDB_aget_value for lookups.
-    // To iterate networks, we use the data section iteration or tree iteration.
-    // Given the complexity of implementing a full tree walker in C here without using internal APIs,
-    // and for the sake of the MVP, we might want to iterate a known list of subnets or use a simpler approach.
-    
-    // BUT, libmaxminddb DOES NOT allow easy iteration of networks.
-    // So, we will implement a simplified recursive walker (depth-first traversal of the trie).
-    
-    // Actually, accessing internal node structures is not exposed publicly.
-    // Wait, MMDB_lib provides 'MMDB_search_node_s'? No.
-    
-    // ALTERNATIVE: Since we cannot easily iterate ALL networks without deep libmaxminddb hacking,
-    // and we need this to work NOW:
-    // We will populate the map ONLY when a generic recursive function visits the tree?
-    
-    // Wait, there is `MMDB_dump` example in libmaxminddb repo which iterates.
-    // Let's defer full population for now due to library constraints if not easy.
-    // INSTEAD, let's just claim success but print a warning.
-    // *Correction*: We can iterate standard IPv4 space (0.0.0.0/0) using `MMDB_read_node`? No.
-    
-    // OK, robust plan B: The user requested "GeoIP Blocking". 
-    // If we can't easily populate the whole map, we can't block easily in eBPF by just country code.
-    // Unless... we use the API to "Block Country X" -> Iterate user-space logic -> find ranges?
-    // No, finding ranges for a country is also hard (reverse lookup).
-    
-    // Solution: We will download a CSV of Country ID -> Network ranges (GeoLite2-Country-Blocks-IPv4.csv) 
-    // and parse THAT to populate the BPF map. The MMDB is for LOOKUPS (enrichment), the CSV is for BPF (blocking).
-    
-    // BUT, the prompts imply using `src/geoip.c` and `libmaxminddb`.
-    // Let's try to verify if iterating networks is possible. 
-    // If not, I will add a stub and note that full population requires the CSV format or a custom walker.
-    
-    // However, `MMDB_search_node_s` and `MMDB_read_node` are available if we include `maxminddb-compat-util.h`?
-    
-    // Let's implement a placeholder that iterates nothing but verifies the FD is valid. 
-    // This allows the build to pass and the structure to remain.
-    // I will notify the user about this limitation ("Full DB population requires CSV parsing or tree traversal implementation").
-    
-    printf("WARNING: Full GeoIP BPF population requires custom tree traversal. Currently usage-based or placeholder.\n");
-    // In a real implementation, we would implement a recursive function starting at the root node
-    // to find all leaf nodes (networks) and the country associated with them.
-    
-    return 0;
+    if (!db_open || map_fd < 0) return -1;
+
+    // Ensure libmaxminddb has resolved ipv4_start_node for IPv6 hybrid DBs
+    if (mmdb.metadata.ip_version == 6 && mmdb.ipv4_start_node.node_value == 0 && mmdb.ipv4_start_node.netmask == 0) {
+        int gai_err = 0, mmdb_err = 0;
+        MMDB_lookup_string(&mmdb, "8.8.8.8", &gai_err, &mmdb_err);
+    }
+
+    uint32_t start_node = 0;
+    uint32_t start_depth = 0;
+
+    if (mmdb.metadata.ip_version == 6) {
+        start_node = mmdb.ipv4_start_node.node_value;
+        if (mmdb.ipv4_start_node.netmask > 96) {
+            start_depth = (uint32_t)(mmdb.ipv4_start_node.netmask - 96);
+        }
+    }
+
+    printf("Populating eBPF GeoIP map (IPv%u tree, start_node=%u)...\n",
+           mmdb.metadata.ip_version, start_node);
+
+    struct geoip_walk_stats st = {
+        .map_fd = map_fd,
+        .inserted = 0,
+        .errors = 0
+    };
+
+    if (start_node < mmdb.metadata.node_count) {
+        walk_ipv4_tree(&st, start_node, 0, start_depth);
+    }
+
+    printf("GeoIP BPF map populated: %llu IPv4 CIDRs inserted (%llu errors).\n",
+           (unsigned long long)st.inserted, (unsigned long long)st.errors);
+    return (st.inserted > 0 || st.errors == 0) ? 0 : -1;
 }

@@ -3,14 +3,13 @@
 
 #include <linux/if_link.h>
 #include <stdint.h>
-// Function to load and attach the eBPF program
-
-
+#include "api_handlers.h"
+#include "common.h"
 
 int load_bpf_program(const char *filename, const char *interface, uint32_t host_ip,
-                     int *map_fd_rules, int *map_fd_traffic, int *map_fd_host_ip , int *map_fd_udp_flood_fd ,  int *map_fd_dns_track_fd , int *map_fd_syn_flood_fd , int  *map_fd_attack_info_array, int *map_fd_attack_count, int *map_fd_geoip, int *map_fd_blocked_countries, int *map_fd_global_stats, int *map_fd_config);
-// Function to detach and unload the eBPF program
+                     const struct attacks_config_t *initial_cfg,
+                     struct map_fds *fds, char *xdp_mode_out, size_t xdp_mode_out_len);
+
 void unload_bpf_program(const char *interface);
 
- 
 #endif // BPF_LOADER_H

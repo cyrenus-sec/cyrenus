@@ -4,299 +4,826 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cyrenus Dashboard</title>
+    <title>Cyrenus | XDP &amp; Host Defense Console</title>
     <link rel="stylesheet" href="styles.css">
     <script src="app.js" defer></script>
 </head>
 
 <body class="bg-brand-dark text-gray-200 font-sans antialiased h-screen overflow-hidden">
-    <div id="app" x-data="{ sidebarOpen: false, currentPage: 'dashboard' }" class="flex h-full">
+    <div id="app" x-data="dashboard_data"
+        @keydown.escape.window="sponsorshipModalOpen = false; security.showModal = false; generatedKey = null; sidebarOpen = false"
+        class="flex h-full relative">
+
+        <!-- Mobile Sidebar Backdrop -->
+        <div x-cloak x-show="sidebarOpen" @click="sidebarOpen = false"
+            class="fixed inset-0 z-30 bg-black/70 backdrop-blur-sm md:hidden"></div>
+
         <!-- Sidebar -->
-        <aside
-            class="w-64 bg-brand-light border-r border-gray-800 flex-shrink-0 hidden md:flex flex-col transition-all duration-300">
-            <div class="p-6 flex items-center justify-center border-b border-gray-800">
-                <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
-                    CYRENUS</h1>
+        <aside :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'"
+            class="fixed md:static inset-y-0 left-0 z-40 w-64 bg-brand-light border-r border-gray-800 flex-shrink-0 flex flex-col transition-transform duration-200 ease-out">
+            <div class="px-6 py-5 flex items-center justify-between border-b border-gray-800">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-500/20 to-blue-600/20 border border-cyan-500/30 flex items-center justify-center">
+                        <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500 tracking-tight leading-none">
+                            CYRENUS
+                        </h1>
+                        <p class="text-[10px] text-gray-500 uppercase tracking-widest mt-0.5">XDP Defense v2</p>
+                    </div>
+                </div>
+                <button @click="sidebarOpen = false" class="md:hidden text-gray-400 hover:text-white p-1">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
             </div>
 
             <nav class="flex-1 overflow-y-auto py-4 px-3 space-y-1">
-                <a href="#" @click.prevent="currentPage = 'dashboard'"
-                    :class="currentPage === 'dashboard' ? 'bg-brand-accent text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
-                    class="flex items-center px-4 py-3 rounded-lg transition-colors group">
-                    <span class="mr-3">📊</span> Dashboard
+                <a href="#dashboard" @click.prevent="switchPage('dashboard')"
+                    :class="currentPage === 'dashboard' ? 'bg-brand-accent text-white border border-cyan-500/30 shadow-sm' : 'text-gray-400 hover:bg-gray-800/70 hover:text-white'"
+                    class="flex items-center justify-between px-4 py-2.5 rounded-lg transition-colors text-sm font-medium">
+                    <span class="flex items-center gap-3">
+                        <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                        </svg>
+                        Overview
+                    </span>
                 </a>
-                <a href="#" @click.prevent="currentPage = 'traffic'"
-                    :class="currentPage === 'traffic' ? 'bg-brand-accent text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
-                    class="flex items-center px-4 py-3 rounded-lg transition-colors group">
-                    <span class="mr-3">🌍</span> Traffic
+
+                <a href="#attacks" @click.prevent="switchPage('attacks')"
+                    :class="currentPage === 'attacks' ? 'bg-brand-accent text-white border border-cyan-500/30 shadow-sm' : 'text-gray-400 hover:bg-gray-800/70 hover:text-white'"
+                    class="flex items-center justify-between px-4 py-2.5 rounded-lg transition-colors text-sm font-medium">
+                    <span class="flex items-center gap-3">
+                        <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        Attacks &amp; Blocks
+                    </span>
+                    <span x-cloak x-show="stats.active_attacks > 0 || stats.active_blocks > 0"
+                        class="px-2 py-0.5 text-[10px] font-bold rounded-full tabular-nums"
+                        :class="stats.active_attacks > 0 ? 'bg-red-500/20 text-red-400 border border-red-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'"
+                        x-text="stats.active_attacks > 0 ? stats.active_attacks : stats.active_blocks"></span>
                 </a>
-                <a href="#" @click.prevent="currentPage = 'attacks'"
-                    :class="currentPage === 'attacks' ? 'bg-brand-accent text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
-                    class="flex items-center px-4 py-3 rounded-lg transition-colors group">
-                    <span class="mr-3">🛡️</span> Attacks
+
+                <a href="#traffic" @click.prevent="switchPage('traffic')"
+                    :class="currentPage === 'traffic' ? 'bg-brand-accent text-white border border-cyan-500/30 shadow-sm' : 'text-gray-400 hover:bg-gray-800/70 hover:text-white'"
+                    class="flex items-center justify-between px-4 py-2.5 rounded-lg transition-colors text-sm font-medium">
+                    <span class="flex items-center gap-3">
+                        <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Live Traffic
+                    </span>
+                    <span x-cloak x-show="traffic.length > 0"
+                        class="text-[10px] text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded tabular-nums"
+                        x-text="traffic.length"></span>
                 </a>
-                <a href="#" @click.prevent="currentPage = 'rules'"
-                    :class="currentPage === 'rules' ? 'bg-brand-accent text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
-                    class="flex items-center px-4 py-3 rounded-lg transition-colors group">
-                    <span class="mr-3">📝</span> Rules
+
+                <a href="#rules" @click.prevent="switchPage('rules')"
+                    :class="currentPage === 'rules' ? 'bg-brand-accent text-white border border-cyan-500/30 shadow-sm' : 'text-gray-400 hover:bg-gray-800/70 hover:text-white'"
+                    class="flex items-center justify-between px-4 py-2.5 rounded-lg transition-colors text-sm font-medium">
+                    <span class="flex items-center gap-3">
+                        <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                        </svg>
+                        Firewall &amp; Lists
+                    </span>
                 </a>
-                <a href="#" @click.prevent="currentPage = 'security'"
-                    :class="currentPage === 'security' ? 'bg-brand-accent text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
-                    class="flex items-center px-4 py-3 rounded-lg transition-colors group">
-                    <span class="mr-3">🚨</span> Security
+
+                <a href="#security" @click.prevent="switchPage('security')"
+                    :class="currentPage === 'security' ? 'bg-brand-accent text-white border border-cyan-500/30 shadow-sm' : 'text-gray-400 hover:bg-gray-800/70 hover:text-white'"
+                    class="flex items-center justify-between px-4 py-2.5 rounded-lg transition-colors text-sm font-medium">
+                    <span class="flex items-center gap-3">
+                        <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                        </svg>
+                        Host Security
+                    </span>
+                    <span x-cloak x-show="security.stats.critical_alerts > 0"
+                        class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-red-500/20 text-red-400 tabular-nums"
+                        x-text="security.stats.critical_alerts"></span>
                 </a>
-                <a href="#" @click.prevent="currentPage = 'settings'"
-                    :class="currentPage === 'settings' ? 'bg-brand-accent text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
-                    class="flex items-center px-4 py-3 rounded-lg transition-colors group">
-                    <span class="mr-3">⚙️</span> Settings
+
+                <a href="#settings" @click.prevent="switchPage('settings')"
+                    :class="currentPage === 'settings' ? 'bg-brand-accent text-white border border-cyan-500/30 shadow-sm' : 'text-gray-400 hover:bg-gray-800/70 hover:text-white'"
+                    class="flex items-center justify-between px-4 py-2.5 rounded-lg transition-colors text-sm font-medium">
+                    <span class="flex items-center gap-3">
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                        Settings &amp; Keys
+                    </span>
                 </a>
-               
             </nav>
 
-            <div class="p-4 border-t border-gray-800">
-                <div class="flex items-center">
-                    <div
-                        class="h-8 w-8 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-xs font-bold">
-                        A</div>
-                    <div class="ml-3">
-                        <p class="text-sm font-medium text-white">Admin</p>
-                        <p class="text-xs text-green-400">Connected</p>
+            <!-- Sidebar Footer & User -->
+            <div class="p-4 border-t border-gray-800 space-y-3">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center min-w-0">
+                        <div class="h-8 w-8 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                            x-text="(username || 'A').charAt(0).toUpperCase()">A</div>
+                        <div class="ml-3 truncate">
+                            <p class="text-sm font-medium text-white truncate" x-text="username">Admin</p>
+                            <p class="text-[11px] flex items-center gap-1"
+                                :class="wsConnected ? 'text-emerald-400' : 'text-amber-400'">
+                                <span class="h-1.5 w-1.5 rounded-full" :class="wsConnected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'"></span>
+                                <span x-text="wsConnected ? 'Real-time link' : 'Reconnecting'"></span>
+                            </p>
+                        </div>
                     </div>
+                    <button @click="logout()" title="Sign Out"
+                        class="text-gray-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-gray-800 transition">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                        </svg>
+                    </button>
                 </div>
 
-                <!-- Footer -->
-                <footer class="mt-12 border-t border-gray-800 pt-6 pb-2 text-center">
-                    <p class="text-gray-500 text-xs">
-                        Cyrenus Protection Engine v2.0 &bull;
+                <div class="pt-2 border-t border-gray-800/80 text-center">
+                    <p class="text-gray-500 text-[11px]">
+                        Cyrenus Engine v2.0 &bull;
                         <a href="#" @click.prevent="sponsorshipModalOpen = true"
-                            class="text-cyan-500 hover:text-cyan-400 transition">Sponsor Project</a>
+                            class="text-cyan-500 hover:text-cyan-400 transition">About / Sponsor</a>
                     </p>
-                </footer>
+                </div>
             </div>
         </aside>
 
         <!-- Main Content -->
         <main class="flex-1 flex flex-col min-w-0 overflow-hidden bg-brand-dark relative">
-            <header
-                class="h-16 flex items-center justify-between px-6 border-b border-gray-800 bg-brand-light/50 backdrop-blur-md">
-                <button @click="sidebarOpen = !sidebarOpen" class="md:hidden text-gray-400 hover:text-white">
-                    Menu
-                </button>
-                <div class="flex items-center space-x-4">
-                    <span class="h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
-                    <span class="text-sm text-gray-400 capitalize"
-                        x-text="'System Core Active | ' + currentPage"></span>
+            <!-- Header -->
+            <header class="h-16 flex items-center justify-between px-4 md:px-6 border-b border-gray-800 bg-brand-light/60 backdrop-blur-md flex-shrink-0">
+                <div class="flex items-center gap-3 min-w-0">
+                    <button @click="sidebarOpen = !sidebarOpen"
+                        class="md:hidden text-gray-300 hover:text-white p-2 rounded-lg hover:bg-gray-800 transition"
+                        aria-label="Open Navigation">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+                        </svg>
+                    </button>
+                    <div class="flex items-center gap-2.5 min-w-0">
+                        <span class="h-2.5 w-2.5 rounded-full flex-shrink-0"
+                            :class="systemStats.dry_run ? 'bg-amber-400' : 'bg-emerald-500 animate-pulse'"></span>
+                        <h2 class="text-sm md:text-base font-bold text-white capitalize truncate"
+                            x-text="currentPage === 'dashboard' ? 'Security Overview' : (currentPage === 'rules' ? 'Firewall & Access Lists' : (currentPage === 'attacks' ? 'Attacks & Active Blocks' : (currentPage === 'security' ? 'Host Security (Tetragon)' : (currentPage === 'traffic' ? 'Live Network Flows' : 'System Settings & API Keys'))))"></h2>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-2 md:gap-3">
+                    <span class="hidden sm:inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold border"
+                        :class="systemStats.dry_run ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' : 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'"
+                        x-text="systemStats.interface + ' · ' + (systemStats.xdp_mode || 'XDP')"></span>
+
+                    <span class="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border"
+                        :class="settings.auto_block_enabled ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30' : 'bg-gray-700/40 text-gray-400 border-gray-700'">
+                        <span class="w-1.5 h-1.5 rounded-full" :class="settings.auto_block_enabled ? 'bg-emerald-400' : 'bg-gray-500'"></span>
+                        <span x-text="settings.auto_block_enabled ? 'Auto-Block ON' : 'Auto-Block OFF'"></span>
+                    </span>
+
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border"
+                        :class="wsConnected ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-amber-500/10 text-amber-300 border-amber-500/30'">
+                        <span class="w-1.5 h-1.5 rounded-full" :class="wsConnected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'"></span>
+                        <span x-text="wsConnected ? 'Live' : (wsConnecting ? 'Connecting' : 'Offline')"></span>
+                    </span>
+
+                    <button @click="refreshCurrentPage()"
+                        class="inline-flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 px-3 py-1.5 rounded-lg text-xs font-semibold transition border border-gray-700">
+                        <svg class="w-3.5 h-3.5" :class="isRefreshing ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        <span class="hidden sm:inline">Refresh</span>
+                    </button>
                 </div>
             </header>
 
-            <div class="flex-1 overflow-y-auto p-6" x-data="dashboard_data">
-                <!-- Dashboard Page -->
-                <div x-show="currentPage === 'dashboard'" class="animate-fade-in">
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                        <div
-                            class="bg-brand-light rounded-xl p-6 border border-gray-800 shadow-lg relative overflow-hidden group hover:border-cyan-500/30 transition-all">
-                            <h3 class="text-gray-400 text-sm font-medium uppercase tracking-wider">Current Load</h3>
-                            <div class="mt-2 flex items-baseline">
-                                <span class="text-3xl font-bold text-white" x-text="stats.pps">0</span>
-                                <span class="ml-2 text-sm text-gray-500">PPS</span>
+            <!-- Scrollable Content Area -->
+            <div class="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+
+                <!-- ===================== DASHBOARD PAGE ===================== -->
+                <div x-show="currentPage === 'dashboard'" class="animate-fade-in space-y-6">
+                    <!-- 4 KPI Cards -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
+                        <!-- Allowed Load -->
+                        <div class="bg-brand-light rounded-xl p-5 border border-gray-800 shadow-lg hover:border-cyan-500/40 transition-all">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-gray-400 text-xs font-bold uppercase tracking-wider">Allowed Load</h3>
+                                <span class="text-[11px] font-mono text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded"
+                                    x-text="formatBitsPerSec(stats.passed_bps)"></span>
                             </div>
+                            <div class="mt-3 flex items-baseline gap-2">
+                                <span class="text-3xl font-black text-white tabular-nums" x-text="formatNumber(stats.passed_pps)">0</span>
+                                <span class="text-xs font-semibold text-gray-400">PPS</span>
+                            </div>
+                            <p class="mt-2 text-xs text-gray-500 tabular-nums">
+                                Passed total: <span class="text-gray-300 font-medium" x-text="formatNumber(stats.passed_packets)">0</span> pkts
+                            </p>
                         </div>
-                        <div
-                            class="bg-brand-light rounded-xl p-6 border border-gray-800 shadow-lg relative overflow-hidden group hover:border-red-500/30 transition-all">
-                            <h3 class="text-gray-400 text-sm font-medium uppercase tracking-wider">Attacks Mitigated
-                            </h3>
-                            <div class="mt-2 flex items-baseline">
-                                <span class="text-3xl font-bold text-white" x-text="stats.attacks">0</span>
+
+                        <!-- Mitigated / Dropped Traffic -->
+                        <div class="bg-brand-light rounded-xl p-5 border border-gray-800 shadow-lg hover:border-red-500/40 transition-all">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-gray-400 text-xs font-bold uppercase tracking-wider">Mitigated Load</h3>
+                                <span class="text-[11px] font-mono text-red-400 bg-red-500/10 px-2 py-0.5 rounded"
+                                    x-text="formatBitsPerSec(stats.dropped_bps)"></span>
                             </div>
+                            <div class="mt-3 flex items-baseline gap-2">
+                                <span class="text-3xl font-black text-red-400 tabular-nums" x-text="formatNumber(stats.dropped_pps)">0</span>
+                                <span class="text-xs font-semibold text-gray-400">DROP PPS</span>
+                            </div>
+                            <p class="mt-2 text-xs text-gray-500 tabular-nums">
+                                Dropped total: <span class="text-gray-300 font-medium" x-text="formatNumber(stats.dropped_packets)">0</span>
+                                (<span x-text="formatBytes(stats.dropped_bytes)">0 B</span>)
+                            </p>
                         </div>
-                        <div
-                            class="bg-brand-light rounded-xl p-6 border border-gray-800 shadow-lg relative overflow-hidden group hover:border-purple-500/30 transition-all">
-                            <h3 class="text-gray-400 text-sm font-medium uppercase tracking-wider">Storage</h3>
-                            <div class="mt-2 flex items-baseline">
-                                <span class="text-3xl font-bold text-white">4.2 GB</span>
-                                <span class="ml-2 text-sm text-gray-500">Used</span>
+
+                        <!-- Active Attacks & Blocks -->
+                        <div class="bg-brand-light rounded-xl p-5 border border-gray-800 shadow-lg hover:border-amber-500/40 transition-all">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-gray-400 text-xs font-bold uppercase tracking-wider">Active Defense</h3>
+                                <button @click="switchPage('attacks')" class="text-[11px] text-cyan-400 hover:text-cyan-300 font-semibold">Manage &rarr;</button>
                             </div>
+                            <div class="mt-3 flex items-baseline gap-4">
+                                <div>
+                                    <span class="text-3xl font-black tabular-nums"
+                                        :class="stats.active_attacks > 0 ? 'text-red-400' : 'text-white'"
+                                        x-text="stats.active_attacks">0</span>
+                                    <span class="text-xs text-gray-400 ml-1">Active</span>
+                                </div>
+                                <div class="text-gray-700">|</div>
+                                <div>
+                                    <span class="text-2xl font-bold text-amber-400 tabular-nums" x-text="stats.active_blocks">0</span>
+                                    <span class="text-xs text-gray-400 ml-1">Blocked IPs</span>
+                                </div>
+                            </div>
+                            <p class="mt-2 text-xs text-gray-500 tabular-nums">
+                                Recorded incidents: <span class="text-gray-300 font-medium" x-text="formatNumber(stats.attacks_total)">0</span>
+                            </p>
+                        </div>
+
+                        <!-- System & Real Storage -->
+                        <div class="bg-brand-light rounded-xl p-5 border border-gray-800 shadow-lg hover:border-purple-500/40 transition-all">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-gray-400 text-xs font-bold uppercase tracking-wider">System &amp; Storage</h3>
+                                <span class="text-[11px] text-emerald-400 font-mono" x-text="formatUptime(systemStats.uptime_sec)">0s</span>
+                            </div>
+                            <div class="mt-3 flex items-baseline gap-2">
+                                <span class="text-3xl font-black text-white tabular-nums" x-text="formatBytes(systemStats.db_size_bytes)">0 B</span>
+                                <span class="text-xs text-gray-400">DB</span>
+                            </div>
+                            <p class="mt-2 text-xs text-gray-500 tabular-nums truncate">
+                                Disk: <span class="text-gray-300" x-text="formatBytes(systemStats.disk_used_bytes)"></span> /
+                                <span x-text="formatBytes(systemStats.disk_total_bytes)"></span>
+                            </p>
                         </div>
                     </div>
 
-                    <div class="bg-brand-light rounded-xl border border-gray-800 p-6 shadow-lg">
-                        <h3 class="text-lg font-bold text-white mb-4">Traffic Overview</h3>
-                        <div class="h-64 relative w-full">
+                    <!-- Dual-Series Live Chart -->
+                    <div class="bg-brand-light rounded-xl border border-gray-800 p-5 md:p-6 shadow-lg">
+                        <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                            <div>
+                                <h3 class="text-lg font-bold text-white">Real-Time Traffic &amp; XDP Mitigation</h3>
+                                <p class="text-xs text-gray-400">Live kernel telemetry distinguishing allowed traffic vs. dropped attack floods.</p>
+                            </div>
+                            <div class="inline-flex rounded-lg bg-brand-dark p-1 border border-gray-800">
+                                <button @click="setChartMode('pps')"
+                                    :class="chartMode === 'pps' ? 'bg-cyan-600 text-white shadow' : 'text-gray-400 hover:text-white'"
+                                    class="px-3 py-1 rounded-md text-xs font-bold transition">PPS</button>
+                                <button @click="setChartMode('mbps')"
+                                    :class="chartMode === 'mbps' ? 'bg-cyan-600 text-white shadow' : 'text-gray-400 hover:text-white'"
+                                    class="px-3 py-1 rounded-md text-xs font-bold transition">Mbps</button>
+                            </div>
+                        </div>
+                        <div class="h-72 relative w-full">
                             <canvas id="trafficChart"></canvas>
                         </div>
                     </div>
-                </div>
 
-                <!-- Traffic Page -->
-                <div x-show="currentPage === 'traffic'" class="animate-fade-in" x-init="fetchTraffic()">
-                    <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
-                        <div class="p-6 border-b border-gray-800 flex justify-between items-center">
-                            <h3 class="text-lg font-bold text-white">Live Traffic Flows</h3>
-                            <button @click="fetchTraffic()"
-                                class="text-sm bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded transition">Refresh</button>
+                    <!-- Drop Vector Telemetry Breakdown -->
+                    <div class="bg-brand-light rounded-xl border border-gray-800 p-5 shadow-lg">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="text-sm font-bold text-gray-300 uppercase tracking-wider">XDP Drop Vector Breakdown (Cumulative)</h3>
+                            <span class="text-xs text-gray-500">Rules: <span class="text-gray-300" x-text="systemStats.rules_count"></span> &bull; WL: <span class="text-gray-300" x-text="systemStats.whitelist_count"></span> &bull; BL: <span class="text-gray-300" x-text="systemStats.blacklist_count"></span></span>
                         </div>
-                        <table class="w-full text-left">
-                            <thead class="bg-gray-900/50 text-gray-400 text-xs uppercase tracking-wider">
-                                <tr>
-                                    <th class="px-6 py-4 font-medium">Source</th>
-                                    <th class="px-6 py-4 font-medium">Destination</th>
-                                    <th class="px-6 py-4 font-medium">Proto</th>
-                                    <th class="px-6 py-4 font-medium">Packets</th>
-                                    <th class="px-6 py-4 font-medium">Bytes</th>
-                                    <th class="px-6 py-4 font-medium text-right">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-gray-800">
-                                <template x-for="flow in paginatedTraffic"
-                                    :key="'f_' + flow.src_ip + flow.src_port + flow.dst_ip + flow.dst_port + flow.proto">
-                                    <tr class="hover:bg-gray-800/30 transition-colors text-sm">
-                                        <td class="px-6 py-4 font-mono">
-                                            <span class="text-cyan-400 font-medium" x-text="flow.src_ip"></span>
-                                            <span class="text-gray-500 text-xs" x-text="':' + flow.src_port"></span>
-                                        </td>
-                                        <td class="px-6 py-4 font-mono">
-                                            <span class="text-gray-300" x-text="flow.dst_ip"></span>
-                                            <span class="text-gray-500 text-xs" x-text="':' + flow.dst_port"></span>
-                                        </td>
-                                        <td class="px-6 py-4">
-                                            <span
-                                                class="bg-gray-800 text-gray-400 px-2 py-0.5 rounded text-[10px] font-bold uppercase"
-                                                x-text="flow.proto === 6 ? 'TCP' : (flow.proto === 17 ? 'UDP' : (flow.proto === 1 ? 'ICMP' : flow.proto))"></span>
-                                        </td>
-                                        <td class="px-6 py-4 text-white" x-text="flow.packets"></td>
-                                        <td class="px-6 py-4 text-gray-400" x-text="formatBytes(flow.bytes)"></td>
-                                        <td class="px-6 py-4 text-right">
-                                            <button @click="blockIP(flow.src_ip)"
-                                                class="text-red-500 hover:text-red-400 text-xs font-bold uppercase border border-red-500/30 hover:border-red-500 px-2 py-1 rounded transition">Block
-                                                IP</button>
-                                        </td>
-                                    </tr>
-                                </template>
-                            </tbody>
-                        </table>
+                        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
+                                <p class="text-[10px] uppercase font-bold text-gray-500">SYN Drops</p>
+                                <p class="text-lg font-bold text-red-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.syn_drops)">0</p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
+                                <p class="text-[10px] uppercase font-bold text-gray-500">UDP Drops</p>
+                                <p class="text-lg font-bold text-orange-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.udp_drops)">0</p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
+                                <p class="text-[10px] uppercase font-bold text-gray-500">ICMP Drops</p>
+                                <p class="text-lg font-bold text-amber-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.icmp_drops)">0</p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
+                                <p class="text-[10px] uppercase font-bold text-gray-500">DNS Amp</p>
+                                <p class="text-lg font-bold text-yellow-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.dns_drops)">0</p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
+                                <p class="text-[10px] uppercase font-bold text-gray-500">Fragment</p>
+                                <p class="text-lg font-bold text-pink-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.frag_drops)">0</p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
+                                <p class="text-[10px] uppercase font-bold text-gray-500">Auto-Block</p>
+                                <p class="text-lg font-bold text-rose-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.autoblock_drops)">0</p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
+                                <p class="text-[10px] uppercase font-bold text-gray-500">Rules / BL</p>
+                                <p class="text-lg font-bold text-cyan-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.rule_drops)">0</p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
+                                <p class="text-[10px] uppercase font-bold text-gray-500">GeoIP</p>
+                                <p class="text-lg font-bold text-purple-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.geo_drops)">0</p>
+                            </div>
+                        </div>
+                    </div>
 
-                        <!-- Pagination Controls -->
-                        <div class="flex justify-between items-center px-6 py-4 border-t border-gray-800">
-                            <span class="text-sm text-gray-500">
-                                Showing <span x-text="(trafficPage - 1) * itemsPerPage + 1"></span> - <span
-                                    x-text="Math.min(trafficPage * itemsPerPage, traffic.length)"></span> of <span
-                                    x-text="traffic.length"></span> flows
-                            </span>
-                            <div class="flex space-x-2">
-                                <button @click="prevPage()" :disabled="trafficPage === 1"
-                                    :class="trafficPage === 1 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-700'"
-                                    class="bg-gray-800 text-white px-3 py-1 rounded transition text-sm">Prev</button>
-                                <span
-                                    class="bg-gray-800 text-cyan-500 px-3 py-1 rounded font-mono text-sm flex items-center"
-                                    x-text="trafficPage"></span>
-                                <button @click="nextPage()" :disabled="trafficPage >= totalPages()"
-                                    :class="trafficPage >= totalPages() ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-700'"
-                                    class="bg-gray-800 text-white px-3 py-1 rounded transition text-sm">Next</button>
+                    <!-- Two-Column Quick Triage Widgets -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <!-- Active Auto-Blocks Preview -->
+                        <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                            <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
+                                <h3 class="font-bold text-white text-sm uppercase tracking-wider">Active Auto-Blocked IPs</h3>
+                                <button @click="switchPage('attacks')" class="text-xs text-cyan-400 hover:text-cyan-300 font-semibold">View All</button>
+                            </div>
+                            <div class="divide-y divide-gray-800">
+                                <template x-for="b in blocks.slice(0, 5)" :key="'db_blk_' + b.ip">
+                                    <div class="px-5 py-3 flex items-center justify-between text-sm hover:bg-gray-800/30">
+                                        <div>
+                                            <p class="font-mono font-bold text-red-400" x-text="b.ip"></p>
+                                            <p class="text-xs text-gray-400"
+                                                x-text="b.attack_type + ' · ' + formatNumber(b.blocked_packets) + ' pkts dropped'"></p>
+                                        </div>
+                                        <div class="flex items-center gap-3">
+                                            <span class="text-xs font-mono text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded"
+                                                x-text="b.remaining_sec + 's left'"></span>
+                                            <button @click="unblockIP(b.ip)"
+                                                class="text-xs text-gray-300 hover:text-white bg-gray-800 hover:bg-gray-700 px-2.5 py-1 rounded border border-gray-700 transition">Unblock</button>
+                                        </div>
+                                    </div>
+                                </template>
+                                <div x-cloak x-show="blocks.length === 0" class="px-5 py-8 text-center text-xs text-gray-500">
+                                    No IPs are currently under dynamic auto-block.
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Recent Attacks Preview -->
+                        <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                            <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
+                                <h3 class="font-bold text-white text-sm uppercase tracking-wider">Recent Attack Events</h3>
+                                <button @click="switchPage('attacks')" class="text-xs text-cyan-400 hover:text-cyan-300 font-semibold">Full History</button>
+                            </div>
+                            <div class="divide-y divide-gray-800">
+                                <template x-for="a in attacks.slice(0, 5)" :key="'db_atk_' + a.id">
+                                    <div class="px-5 py-3 flex items-center justify-between text-sm hover:bg-gray-800/30">
+                                        <div class="min-w-0 pr-3">
+                                            <div class="flex items-center gap-2">
+                                                <span class="font-mono font-bold text-white" x-text="a.src_ip"></span>
+                                                <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-red-500/15 text-red-400"
+                                                    x-text="a.attack_type"></span>
+                                            </div>
+                                            <p class="text-xs text-gray-500 mt-0.5 truncate"
+                                                x-text="a.timestamp + ' · ' + formatNumber(a.dropped_packets) + '/' + formatNumber(a.packets) + ' pkts dropped'"></p>
+                                        </div>
+                                        <span class="text-[11px] font-bold uppercase px-2 py-0.5 rounded-full flex-shrink-0"
+                                            :class="a.status === 'active' ? 'bg-red-500/20 text-red-400' : (a.status === 'mitigated' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-700 text-gray-300')"
+                                            x-text="a.status"></span>
+                                    </div>
+                                </template>
+                                <div x-cloak x-show="attacks.length === 0" class="px-5 py-8 text-center text-xs text-gray-500">
+                                    No network attacks detected yet.
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Attacks Page -->
-                <div x-show="currentPage === 'attacks'" class="animate-fade-in" x-init="fetchAttacks()">
+                <!-- ===================== TRAFFIC PAGE ===================== -->
+                <div x-show="currentPage === 'traffic'" x-cloak class="animate-fade-in space-y-4">
                     <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
-                        <div class="p-6 border-b border-gray-800">
-                            <h3 class="text-lg font-bold text-white">Attack History</h3>
-                        </div>
-                        <table class="w-full text-left">
-                            <thead class="bg-gray-900/50 text-gray-400 text-xs uppercase tracking-wider">
-                                <tr>
-                                    <th class="px-6 py-4 font-medium">Time</th>
-                                    <th class="px-6 py-4 font-medium">Source</th>
-                                    <th class="px-6 py-4 font-medium">Type</th>
-                                    <th class="px-6 py-4 font-medium">Volume</th>
-                                    <th class="px-6 py-4 font-medium">Status</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-gray-800">
-                                <template x-for="attack in attacks" :key="attack.id">
-                                    <tr class="hover:bg-gray-800/30 transition-colors text-sm">
-                                        <td class="px-6 py-4 text-gray-400" x-text="attack.timestamp"></td>
-                                        <td class="px-6 py-4 font-mono text-red-400" x-text="attack.src_ip"></td>
-                                        <td class="px-6 py-4">
-                                            <span
-                                                class="bg-red-900/30 text-red-400 px-2 py-1 rounded-md text-xs font-bold uppercase tracking-tighter"
-                                                x-text="attack.protocol"></span>
-                                        </td>
-                                        <td class="px-6 py-4 text-white" x-text="attack.packets + ' pkts'"></td>
-                                        <td class="px-6 py-4">
-                                            <span class="text-green-500 flex items-center">
-                                                <span class="h-1.5 w-1.5 rounded-full bg-green-500 mr-2"></span>
-                                                Mitigated
-                                            </span>
-                                        </td>
-                                    </tr>
-                                </template>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- Rules Page -->
-                <div x-show="currentPage === 'rules'" class="animate-fade-in" x-init="fetchRules()">
-                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        <!-- Rule List -->
-                        <div
-                            class="lg:col-span-2 bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
-                            <div class="p-6 border-b border-gray-800">
-                                <h3 class="text-lg font-bold text-white">Firewall Rules</h3>
+                        <div class="p-4 md:p-5 border-b border-gray-800 flex flex-wrap gap-3 justify-between items-center">
+                            <div>
+                                <h3 class="text-lg font-bold text-white">Live Network Flows</h3>
+                                <p class="text-xs text-gray-400">Active flows tracked in XDP `active_traffic` map.</p>
                             </div>
-                            <table class="w-full text-left text-sm">
-                                <thead class="bg-gray-900/50 text-gray-400 text-xs uppercase tracking-wider">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <input type="text" x-model="trafficSearch" @input="trafficPage = 1"
+                                    placeholder="Search IP, port, proto..."
+                                    class="bg-brand-dark border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500 w-44 md:w-56">
+                                <select x-model="trafficDirection" @change="trafficPage = 1"
+                                    class="bg-brand-dark border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none">
+                                    <option value="ALL">All Directions</option>
+                                    <option value="IN">Incoming (IN)</option>
+                                    <option value="OUT">Outgoing (OUT)</option>
+                                </select>
+                                <select x-model="trafficSort"
+                                    class="bg-brand-dark border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none">
+                                    <option value="packets">Sort: Packets</option>
+                                    <option value="bytes">Sort: Bytes</option>
+                                    <option value="last_seen">Sort: Most Recent</option>
+                                </select>
+                                <label class="inline-flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer select-none px-2">
+                                    <input type="checkbox" x-model="trafficAutoRefresh" class="rounded bg-brand-dark border-gray-700 text-cyan-500">
+                                    <span>Auto (3s)</span>
+                                </label>
+                                <button @click="fetchTraffic()"
+                                    class="text-xs bg-gray-800 hover:bg-gray-700 text-white font-semibold px-3 py-1.5 rounded-lg border border-gray-700 transition">Refresh</button>
+                            </div>
+                        </div>
+
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left">
+                                <thead class="bg-gray-900/60 text-gray-400 text-xs uppercase tracking-wider">
                                     <tr>
-                                        <th class="px-6 py-4 font-medium">IP Address</th>
-                                        <th class="px-6 py-4 font-medium">Port</th>
-                                        <th class="px-6 py-4 font-medium">Proto</th>
-                                        <th class="px-6 py-4 font-medium">Action</th>
-                                        <th class="px-6 py-4 font-medium text-right">Ops</th>
+                                        <th class="px-5 py-3.5 font-semibold">Source</th>
+                                        <th class="px-5 py-3.5 font-semibold">Destination</th>
+                                        <th class="px-5 py-3.5 font-semibold">Dir / Proto</th>
+                                        <th class="px-5 py-3.5 font-semibold">Packets</th>
+                                        <th class="px-5 py-3.5 font-semibold">Volume</th>
+                                        <th class="px-5 py-3.5 font-semibold">Age</th>
+                                        <th class="px-5 py-3.5 font-semibold text-right">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody class="divide-y divide-gray-800">
-                                    <template x-for="rule in rules" :key="rule.ip + rule.port + rule.proto">
-                                        <tr class="hover:bg-gray-800/30 transition-colors">
-                                            <td class="px-6 py-4 font-mono text-white" x-text="rule.ip"></td>
-                                            <td class="px-6 py-4 text-gray-300" x-text="rule.port"></td>
-                                            <td class="px-6 py-4 text-gray-400" x-text="rule.proto"></td>
-                                            <td class="px-6 py-4">
-                                                <span :class="rule.action === 1 ? 'text-red-400' : 'text-green-400'"
-                                                    x-text="rule.action === 1 ? 'DROP' : 'PASS'"></span>
+                                    <template x-for="flow in paginatedTraffic"
+                                        :key="'f_' + flow.src_ip + '_' + flow.src_port + '_' + flow.dst_ip + '_' + flow.dst_port + '_' + flow.proto">
+                                        <tr class="hover:bg-gray-800/30 transition-colors text-sm">
+                                            <td class="px-5 py-3.5 font-mono">
+                                                <div class="flex items-center gap-2">
+                                                    <span class="text-cyan-400 font-medium" x-text="flow.src_ip"></span>
+                                                    <span class="text-gray-500 text-xs" x-text="':' + flow.src_port"></span>
+                                                    <span x-show="flow.blocked"
+                                                        class="bg-red-500/20 text-red-400 border border-red-500/30 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase">Blocked</span>
+                                                </div>
                                             </td>
-                                            <td class="px-6 py-4 text-right">
-                                                <button @click="deleteRule(rule)"
-                                                    class="text-red-500 hover:text-red-400 font-bold transition">×</button>
+                                            <td class="px-5 py-3.5 font-mono">
+                                                <span class="text-gray-300" x-text="flow.dst_ip"></span>
+                                                <span class="text-gray-500 text-xs" x-text="':' + flow.dst_port"></span>
+                                            </td>
+                                            <td class="px-5 py-3.5">
+                                                <div class="flex items-center gap-1.5">
+                                                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase"
+                                                        :class="flow.direction === 'IN' ? 'bg-blue-500/15 text-blue-300' : 'bg-gray-800 text-gray-400'"
+                                                        x-text="flow.direction || 'IN'"></span>
+                                                    <span class="bg-gray-800 text-gray-300 px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+                                                        x-text="flow.proto_name || protoToName(flow.proto)"></span>
+                                                </div>
+                                            </td>
+                                            <td class="px-5 py-3.5 text-white tabular-nums" x-text="formatNumber(flow.packets)"></td>
+                                            <td class="px-5 py-3.5 text-gray-300 tabular-nums" x-text="formatBytes(flow.bytes)"></td>
+                                            <td class="px-5 py-3.5 text-xs text-gray-400 tabular-nums"
+                                                x-text="(flow.last_seen_sec ?? 0) + 's ago'"></td>
+                                            <td class="px-5 py-3.5 text-right space-x-1.5 whitespace-nowrap">
+                                                <button @click="whitelistIP(flow.src_ip, 'Allowed from live traffic')"
+                                                    class="text-emerald-400 hover:text-emerald-300 text-xs font-bold uppercase border border-emerald-500/30 hover:border-emerald-400 px-2 py-1 rounded transition">Trust</button>
+                                                <button @click="blockIP(flow.src_ip)"
+                                                    class="text-red-400 hover:text-red-300 text-xs font-bold uppercase border border-red-500/30 hover:border-red-400 px-2 py-1 rounded transition">Block</button>
                                             </td>
                                         </tr>
                                     </template>
+                                    <tr x-show="filteredTraffic.length === 0">
+                                        <td colspan="7" class="px-6 py-10 text-center text-sm text-gray-500">
+                                            No active flows match the current filter.
+                                        </td>
+                                    </tr>
                                 </tbody>
                             </table>
                         </div>
 
-                        <!-- Add Rule Form -->
-                        <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg p-6">
-                            <h3 class="text-lg font-bold text-white mb-6">Create New Rule</h3>
+                        <!-- Pagination -->
+                        <div class="flex flex-wrap gap-3 justify-between items-center px-5 py-3.5 border-t border-gray-800 bg-gray-900/20">
+                            <span class="text-xs text-gray-400" x-text="'Showing ' + trafficRangeText()"></span>
+                            <div class="flex items-center space-x-2">
+                                <button @click="prevPage()" :disabled="trafficPage <= 1"
+                                    :class="trafficPage <= 1 ? 'opacity-40 cursor-not-allowed' : 'hover:bg-gray-700'"
+                                    class="bg-gray-800 text-white px-3 py-1 rounded transition text-xs font-semibold">Prev</button>
+                                <span class="bg-gray-800 text-cyan-400 px-3 py-1 rounded font-mono text-xs"
+                                    x-text="trafficPage + ' / ' + totalPages()"></span>
+                                <button @click="nextPage()" :disabled="trafficPage >= totalPages()"
+                                    :class="trafficPage >= totalPages() ? 'opacity-40 cursor-not-allowed' : 'hover:bg-gray-700'"
+                                    class="bg-gray-800 text-white px-3 py-1 rounded transition text-xs font-semibold">Next</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===================== ATTACKS & BLOCKS PAGE ===================== -->
+                <div x-show="currentPage === 'attacks'" x-cloak class="animate-fade-in space-y-6">
+                    <!-- Summary Pills & Type Breakdown -->
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                        <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
+                            <p class="text-xs font-bold uppercase text-gray-400">Total Incidents</p>
+                            <p class="text-2xl font-black text-white mt-1 tabular-nums" x-text="attackSummary.total">0</p>
+                        </div>
+                        <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
+                            <p class="text-xs font-bold uppercase text-red-400">Active Now</p>
+                            <p class="text-2xl font-black text-red-400 mt-1 tabular-nums" x-text="attackSummary.active">0</p>
+                        </div>
+                        <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
+                            <p class="text-xs font-bold uppercase text-emerald-400">Mitigated</p>
+                            <p class="text-2xl font-black text-emerald-400 mt-1 tabular-nums" x-text="attackSummary.mitigated">0</p>
+                        </div>
+                        <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
+                            <p class="text-xs font-bold uppercase text-amber-400">Auto-Blocked IPs</p>
+                            <p class="text-2xl font-black text-amber-400 mt-1 tabular-nums" x-text="blocks.length">0</p>
+                        </div>
+                    </div>
+
+                    <!-- Dynamic Auto-Blocks Table -->
+                    <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                        <div class="px-5 py-4 border-b border-gray-800 flex flex-wrap justify-between items-center gap-3">
+                            <div>
+                                <h3 class="text-base font-bold text-white">Active Kernel Auto-Blocks</h3>
+                                <p class="text-xs text-gray-400">IPs dropped immediately at XDP entry after crossing flood thresholds.</p>
+                            </div>
+                            <button @click="fetchBlocks()"
+                                class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg border border-gray-700 font-semibold transition">Refresh Blocks</button>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left text-sm">
+                                <thead class="bg-gray-900/60 text-gray-400 text-xs uppercase tracking-wider">
+                                    <tr>
+                                        <th class="px-5 py-3 font-semibold">Source IP</th>
+                                        <th class="px-5 py-3 font-semibold">Trigger Vector</th>
+                                        <th class="px-5 py-3 font-semibold">Dropped Pkts / Bytes</th>
+                                        <th class="px-5 py-3 font-semibold">Peak Rate</th>
+                                        <th class="px-5 py-3 font-semibold">TTL Remaining</th>
+                                        <th class="px-5 py-3 font-semibold text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-800">
+                                    <template x-for="blk in blocks" :key="'blk_' + blk.ip">
+                                        <tr class="hover:bg-gray-800/30">
+                                            <td class="px-5 py-3 font-mono font-bold text-red-400" x-text="blk.ip"></td>
+                                            <td class="px-5 py-3">
+                                                <span class="bg-red-900/30 text-red-300 px-2 py-0.5 rounded text-xs font-semibold" x-text="blk.attack_type"></span>
+                                                <span class="ml-1 text-[10px] text-gray-400 uppercase" x-text="blk.protocol"></span>
+                                            </td>
+                                            <td class="px-5 py-3 text-gray-300 tabular-nums">
+                                                <span x-text="formatNumber(blk.blocked_packets) + ' pkts'"></span>
+                                                <span class="text-xs text-gray-500 ml-1" x-text="'(' + formatBytes(blk.blocked_bytes) + ')'"></span>
+                                            </td>
+                                            <td class="px-5 py-3 font-mono text-gray-300 tabular-nums" x-text="formatNumber(blk.peak_pps) + ' PPS'"></td>
+                                            <td class="px-5 py-3">
+                                                <span class="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 font-mono text-xs"
+                                                    x-text="blk.remaining_sec + 's'"></span>
+                                            </td>
+                                            <td class="px-5 py-3 text-right space-x-2 whitespace-nowrap">
+                                                <button @click="promoteBlockToBlacklist(blk.ip)"
+                                                    class="text-xs text-red-400 hover:text-red-300 border border-red-500/30 px-2.5 py-1 rounded font-semibold transition">Perm Blacklist</button>
+                                                <button @click="unblockIP(blk.ip)"
+                                                    class="text-xs text-cyan-400 hover:text-cyan-300 border border-cyan-500/30 px-2.5 py-1 rounded font-semibold transition">Unblock</button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                    <tr x-show="blocks.length === 0">
+                                        <td colspan="6" class="px-6 py-6 text-center text-xs text-gray-500">No IPs are currently auto-blocked.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Attack History & Live Incidents -->
+                    <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                        <div class="p-5 border-b border-gray-800 space-y-4">
+                            <div class="flex flex-wrap justify-between items-center gap-3">
+                                <div>
+                                    <h3 class="text-lg font-bold text-white">Attack Incidents &amp; History</h3>
+                                    <p class="text-xs text-gray-400">Merged telemetry from kernel XDP attack tracking and SQLite history.</p>
+                                </div>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <input type="text" x-model="attackFilters.search" @input.debounce.300ms="fetchAttacks(true)"
+                                        placeholder="Search IP or vector..."
+                                        class="bg-brand-dark border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500 w-44">
+                                    <select x-model="attackFilters.status" @change="fetchAttacks(true)"
+                                        class="bg-brand-dark border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+                                        <option value="all">All Statuses</option>
+                                        <option value="active">Active</option>
+                                        <option value="mitigated">Mitigated</option>
+                                        <option value="resolved">Resolved</option>
+                                    </select>
+                                    <select x-model="attackFilters.type" @change="fetchAttacks(true)"
+                                        class="bg-brand-dark border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+                                        <option value="all">All Types</option>
+                                        <option value="SYN Flood">SYN Flood</option>
+                                        <option value="UDP Flood">UDP Flood</option>
+                                        <option value="ICMP Flood">ICMP Flood</option>
+                                        <option value="DNS Amplification">DNS Amplification</option>
+                                        <option value="Fragment Attack">Fragment Attack</option>
+                                        <option value="GeoIP Block">GeoIP Block</option>
+                                        <option value="Distributed">Distributed Flood</option>
+                                    </select>
+                                    <button @click="clearAttacks()"
+                                        class="text-xs bg-red-900/30 hover:bg-red-900/50 text-red-300 border border-red-500/30 px-3 py-1.5 rounded-lg font-semibold transition">Clear History</button>
+                                </div>
+                            </div>
+
+                            <!-- Per-Type Clickable Chips -->
+                            <div x-cloak x-show="Object.keys(attackSummary.by_type || {}).length > 0" class="flex flex-wrap gap-2">
+                                <template x-for="[typeName, typeCount] in Object.entries(attackSummary.by_type || {})" :key="typeName">
+                                    <button @click="attackFilters.type = (attackFilters.type === typeName ? 'all' : typeName); fetchAttacks(true)"
+                                        :class="attackFilters.type === typeName ? 'bg-cyan-600/30 border-cyan-400 text-cyan-200' : 'bg-brand-dark border-gray-700 text-gray-300 hover:border-gray-600'"
+                                        class="text-[11px] px-2.5 py-1 rounded-full border transition flex items-center gap-1.5">
+                                        <span x-text="typeName"></span>
+                                        <span class="font-mono font-bold text-cyan-400" x-text="typeCount"></span>
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left">
+                                <thead class="bg-gray-900/60 text-gray-400 text-xs uppercase tracking-wider">
+                                    <tr>
+                                        <th class="px-5 py-3.5 font-semibold">Last Seen</th>
+                                        <th class="px-5 py-3.5 font-semibold">Source IP</th>
+                                        <th class="px-5 py-3.5 font-semibold">Attack Vector</th>
+                                        <th class="px-5 py-3.5 font-semibold">Severity</th>
+                                        <th class="px-5 py-3.5 font-semibold">Volume / Dropped</th>
+                                        <th class="px-5 py-3.5 font-semibold">Peak Rate</th>
+                                        <th class="px-5 py-3.5 font-semibold">Status</th>
+                                        <th class="px-5 py-3.5 font-semibold text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-800">
+                                    <template x-for="attack in attacks" :key="'atk_' + attack.id">
+                                        <tr class="hover:bg-gray-800/30 transition-colors text-sm">
+                                            <td class="px-5 py-3.5 text-xs text-gray-400 whitespace-nowrap">
+                                                <div x-text="attack.timestamp"></div>
+                                                <div class="text-[11px] text-gray-500" x-text="'Dur: ' + (attack.duration || 1) + 's'"></div>
+                                            </td>
+                                            <td class="px-5 py-3.5 font-mono text-red-400 font-semibold" x-text="attack.src_ip"></td>
+                                            <td class="px-5 py-3.5">
+                                                <span class="text-white font-medium" x-text="attack.attack_type"></span>
+                                                <span class="ml-1.5 bg-gray-800 text-gray-300 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase"
+                                                    x-text="attack.protocol"></span>
+                                            </td>
+                                            <td class="px-5 py-3.5">
+                                                <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+                                                    :class="attack.severity >= 4 ? 'bg-red-600/25 text-red-300 border border-red-500/40' : (attack.severity == 3 ? 'bg-orange-500/20 text-orange-300 border border-orange-500/30' : (attack.severity == 2 ? 'bg-amber-500/20 text-amber-300' : 'bg-gray-700 text-gray-300'))"
+                                                    x-text="attack.severity_label || (attack.severity >= 4 ? 'critical' : (attack.severity == 3 ? 'high' : (attack.severity == 2 ? 'medium' : 'low')))"></span>
+                                            </td>
+                                            <td class="px-5 py-3.5 tabular-nums">
+                                                <div class="text-white" x-text="formatNumber(attack.packets) + ' pkts · ' + formatBytes(attack.bytes)"></div>
+                                                <div class="text-xs text-emerald-400"
+                                                    x-text="formatNumber(attack.dropped_packets) + ' dropped (' + attackDroppedPercent(attack) + '%)'"></div>
+                                            </td>
+                                            <td class="px-5 py-3.5 font-mono text-gray-300 tabular-nums"
+                                                x-text="formatNumber(attack.peak_pps) + ' PPS'"></td>
+                                            <td class="px-5 py-3.5">
+                                                <div class="flex flex-col items-start gap-1">
+                                                    <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold uppercase"
+                                                        :class="attack.status === 'active' ? 'bg-red-500/20 text-red-400' : (attack.status === 'mitigated' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-700 text-gray-300')">
+                                                        <span class="h-1.5 w-1.5 rounded-full"
+                                                            :class="attack.status === 'active' ? 'bg-red-400 animate-pulse' : (attack.status === 'mitigated' ? 'bg-emerald-400' : 'bg-gray-400')"></span>
+                                                        <span x-text="attack.status"></span>
+                                                    </span>
+                                                    <span x-show="attack.blocked"
+                                                        class="text-[10px] font-bold uppercase text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded">Auto-Blocked</span>
+                                                </div>
+                                            </td>
+                                            <td class="px-5 py-3.5 text-right whitespace-nowrap space-x-1">
+                                                <button x-show="attack.src_ip !== '0.0.0.0'" @click="blockIP(attack.src_ip)"
+                                                    class="text-xs text-red-400 hover:text-red-300 border border-red-500/30 px-2 py-1 rounded font-semibold transition">Perm Drop</button>
+                                                <button x-show="attack.src_ip !== '0.0.0.0'" @click="whitelistIP(attack.src_ip, 'False positive / trusted')"
+                                                    class="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-500/30 px-2 py-1 rounded font-semibold transition">Whitelist</button>
+                                                <button x-show="attack.status !== 'resolved'" @click="resolveAttack(attack)"
+                                                    class="text-xs text-gray-300 hover:text-white border border-gray-700 bg-gray-800 px-2 py-1 rounded font-semibold transition">Resolve</button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                    <tr x-show="attacks.length === 0">
+                                        <td colspan="8" class="px-6 py-10 text-center text-sm text-gray-500">
+                                            No attack records match your filter.
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Server-side Pagination -->
+                        <div class="flex justify-between items-center px-5 py-3.5 border-t border-gray-800 bg-gray-900/20">
+                            <span class="text-xs text-gray-400"
+                                x-text="attacksTotal === 0 ? '0 incidents' : ((attacksOffset + 1) + ' - ' + Math.min(attacksOffset + attacksLimit, attacksTotal) + ' of ' + attacksTotal + ' incidents')"></span>
+                            <div class="flex items-center space-x-2">
+                                <button @click="attacksPrevPage()" :disabled="attacksOffset === 0"
+                                    :class="attacksOffset === 0 ? 'opacity-40 cursor-not-allowed' : 'hover:bg-gray-700'"
+                                    class="bg-gray-800 text-white px-3 py-1 rounded text-xs font-semibold transition">Prev</button>
+                                <span class="bg-gray-800 text-cyan-400 px-3 py-1 rounded font-mono text-xs"
+                                    x-text="attacksCurrentPage() + ' / ' + attacksTotalPages()"></span>
+                                <button @click="attacksNextPage()" :disabled="attacksOffset + attacksLimit >= attacksTotal"
+                                    :class="attacksOffset + attacksLimit >= attacksTotal ? 'opacity-40 cursor-not-allowed' : 'hover:bg-gray-700'"
+                                    class="bg-gray-800 text-white px-3 py-1 rounded text-xs font-semibold transition">Next</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===================== RULES, IP LISTS & GEOIP PAGE ===================== -->
+                <div x-show="currentPage === 'rules'" x-cloak class="animate-fade-in space-y-6">
+                    <!-- Sub-tabs -->
+                    <div class="flex flex-wrap gap-2 border-b border-gray-800 pb-3">
+                        <button @click="rulesSubTab = 'firewall'"
+                            :class="rulesSubTab === 'firewall' ? 'bg-brand-accent text-white border-cyan-500/40' : 'bg-brand-light text-gray-400 border-gray-800 hover:text-white'"
+                            class="px-4 py-2 rounded-lg text-sm font-semibold border transition">
+                            Firewall Rules (<span x-text="rules.length"></span>)
+                        </button>
+                        <button @click="rulesSubTab = 'iplists'"
+                            :class="rulesSubTab === 'iplists' ? 'bg-brand-accent text-white border-cyan-500/40' : 'bg-brand-light text-gray-400 border-gray-800 hover:text-white'"
+                            class="px-4 py-2 rounded-lg text-sm font-semibold border transition">
+                            Whitelist &amp; Blacklist CIDRs (<span x-text="whitelist.length + blacklist.length"></span>)
+                        </button>
+                        <button @click="rulesSubTab = 'geoip'"
+                            :class="rulesSubTab === 'geoip' ? 'bg-brand-accent text-white border-cyan-500/40' : 'bg-brand-light text-gray-400 border-gray-800 hover:text-white'"
+                            class="px-4 py-2 rounded-lg text-sm font-semibold border transition">
+                            GeoIP Country Blocking (<span x-text="geoRules.length"></span>)
+                        </button>
+                    </div>
+
+                    <!-- Firewall Rules Sub-Tab -->
+                    <div x-show="rulesSubTab === 'firewall'" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div class="lg:col-span-2 bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                            <div class="p-5 border-b border-gray-800">
+                                <h3 class="text-base font-bold text-white">Active Kernel Firewall Rules</h3>
+                                <p class="text-xs text-gray-400">Supports wildcard Port `0` (all ports) and protocol `ALL`. `PASS` rules take precedence over flood detectors.</p>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left text-sm">
+                                    <thead class="bg-gray-900/60 text-gray-400 text-xs uppercase tracking-wider">
+                                        <tr>
+                                            <th class="px-5 py-3 font-semibold">IP Address</th>
+                                            <th class="px-5 py-3 font-semibold">Port</th>
+                                            <th class="px-5 py-3 font-semibold">Proto</th>
+                                            <th class="px-5 py-3 font-semibold">Action</th>
+                                            <th class="px-5 py-3 font-semibold">Description</th>
+                                            <th class="px-5 py-3 font-semibold text-right">Ops</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-gray-800">
+                                        <template x-for="rule in rules" :key="rule.rule_key || (rule.ip + '_' + rule.port + '_' + rule.proto)">
+                                            <tr class="hover:bg-gray-800/30 transition-colors">
+                                                <td class="px-5 py-3.5 font-mono text-white" x-text="rule.ip"></td>
+                                                <td class="px-5 py-3.5 text-gray-300" x-text="rule.port === 0 ? 'ALL (0)' : rule.port"></td>
+                                                <td class="px-5 py-3.5">
+                                                    <span class="bg-gray-800 text-gray-300 px-2 py-0.5 rounded text-xs font-bold uppercase" x-text="rule.proto"></span>
+                                                </td>
+                                                <td class="px-5 py-3.5">
+                                                    <span class="px-2 py-0.5 rounded text-xs font-bold"
+                                                        :class="rule.action === 1 ? 'bg-red-500/15 text-red-400' : 'bg-emerald-500/15 text-emerald-400'"
+                                                        x-text="rule.action === 1 ? 'DROP' : 'PASS'"></span>
+                                                </td>
+                                                <td class="px-5 py-3.5 text-xs text-gray-400 max-w-xs truncate" x-text="rule.description || '-'"></td>
+                                                <td class="px-5 py-3.5 text-right">
+                                                    <button @click="deleteRule(rule)"
+                                                        class="text-red-400 hover:text-red-300 font-bold text-xs uppercase border border-red-500/30 px-2 py-1 rounded transition">Delete</button>
+                                                </td>
+                                            </tr>
+                                        </template>
+                                        <tr x-show="rules.length === 0">
+                                            <td colspan="6" class="px-6 py-8 text-center text-xs text-gray-500">No explicit firewall rules configured.</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg p-6 h-fit">
+                            <h3 class="text-base font-bold text-white mb-5">Deploy Firewall Rule</h3>
                             <form @submit.prevent="addRule()" class="space-y-4">
                                 <div>
-                                    <label class="block text-xs font-bold text-gray-500 uppercase mb-1">IP
-                                        Address</label>
-                                    <input type="text" x-model="newRule.ip" placeholder="0.0.0.0"
-                                        class="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500 transition-colors">
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">IPv4 Address</label>
+                                    <input type="text" x-model="newRule.ip" placeholder="e.g. 203.0.113.50" required
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
                                 </div>
-                                <div class="grid grid-cols-2 gap-4">
+                                <div class="grid grid-cols-2 gap-3">
                                     <div>
-                                        <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Port</label>
-                                        <input type="number" x-model="newRule.port"
-                                            class="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500 transition-colors">
+                                        <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Port (0 = All)</label>
+                                        <input type="number" min="0" max="65535" x-model.number="newRule.port"
+                                            class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
                                     </div>
                                     <div>
-                                        <label
-                                            class="block text-xs font-bold text-gray-500 uppercase mb-1">Protocol</label>
+                                        <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Protocol</label>
                                         <select x-model="newRule.proto"
-                                            class="w-full bg-gray-900 border border-gray-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-cyan-500 transition-colors">
+                                            class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
+                                            <option value="all">ALL Protocols</option>
                                             <option value="tcp">TCP</option>
                                             <option value="udp">UDP</option>
                                             <option value="icmp">ICMP</option>
@@ -304,74 +831,234 @@
                                     </div>
                                 </div>
                                 <div>
-                                    <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Action</label>
-                                    <div class="flex space-x-2 mt-2">
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Description (optional)</label>
+                                    <input type="text" x-model="newRule.description" placeholder="Reason or service note"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-2">Action</label>
+                                    <div class="grid grid-cols-2 gap-2">
                                         <button type="button" @click="newRule.action = 'drop'"
                                             :class="newRule.action === 'drop' ? 'bg-red-600 border-red-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400'"
-                                            class="flex-1 border py-2 rounded-lg font-bold transition">DROP</button>
+                                            class="border py-2 rounded-lg text-sm font-bold transition">DROP</button>
                                         <button type="button" @click="newRule.action = 'pass'"
-                                            :class="newRule.action === 'pass' ? 'bg-green-600 border-green-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400'"
-                                            class="flex-1 border py-2 rounded-lg font-bold transition">PASS</button>
+                                            :class="newRule.action === 'pass' ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400'"
+                                            class="border py-2 rounded-lg text-sm font-bold transition">PASS</button>
                                     </div>
                                 </div>
                                 <button type="submit"
-                                    class="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold py-3 rounded-lg shadow-lg shadow-cyan-500/20 transition-all transform active:scale-95">Deploy
-                                    Rule</button>
+                                    class="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold py-2.5 rounded-lg shadow-lg transition">Deploy Rule</button>
                             </form>
+                        </div>
+                    </div>
+
+                    <!-- IP Lists Sub-Tab -->
+                    <div x-show="rulesSubTab === 'iplists'" class="space-y-6">
+                        <div class="bg-brand-light rounded-xl border border-gray-800 p-5 shadow-lg">
+                            <h3 class="text-base font-bold text-white mb-4">Add CIDR / IP List Entry</h3>
+                            <form @submit.prevent="addIpListEntry()" class="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
+                                <div class="md:col-span-2">
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">IP or IP/CIDR</label>
+                                    <input type="text" x-model="newIpList.ip_address" placeholder="192.168.1.0 or 10.0.0.5" required
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">CIDR (/1-32)</label>
+                                    <input type="number" min="1" max="32" x-model.number="newIpList.cidr_range"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">List Type</label>
+                                    <select x-model="newIpList.list_type"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
+                                        <option value="whitelist">Whitelist (Allow All)</option>
+                                        <option value="blacklist">Blacklist (Drop All)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Reason / Note</label>
+                                    <input type="text" x-model="newIpList.reason" placeholder="Trusted subnet"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
+                                </div>
+                                <div>
+                                    <button type="submit"
+                                        class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-4 py-2 rounded-lg text-sm transition">Add Entry</button>
+                                </div>
+                            </form>
+                        </div>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <!-- Whitelist -->
+                            <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                                <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
+                                    <h4 class="font-bold text-emerald-400 text-sm uppercase tracking-wider">Whitelist (Trusted CIDRs)</h4>
+                                    <span class="text-xs text-gray-500">Bypasses rate limits</span>
+                                </div>
+                                <div class="divide-y divide-gray-800">
+                                    <template x-for="entry in whitelist" :key="'wl_' + entry.id">
+                                        <div class="px-5 py-3 flex items-center justify-between text-sm hover:bg-gray-800/30">
+                                            <div>
+                                                <p class="font-mono font-bold text-white" x-text="entry.ip_address + '/' + entry.cidr_range"></p>
+                                                <p class="text-xs text-gray-400" x-text="entry.reason || 'Whitelisted'"></p>
+                                            </div>
+                                            <button @click="deleteIpListEntry(entry.id)"
+                                                class="text-xs text-red-400 hover:text-red-300 border border-red-500/30 px-2 py-1 rounded">Remove</button>
+                                        </div>
+                                    </template>
+                                    <div x-show="whitelist.length === 0" class="px-5 py-8 text-center text-xs text-gray-500">
+                                        Whitelist is empty.
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Blacklist -->
+                            <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                                <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
+                                    <h4 class="font-bold text-red-400 text-sm uppercase tracking-wider">Blacklist (Dropped CIDRs)</h4>
+                                    <span class="text-xs text-gray-500">Dropped at XDP entry</span>
+                                </div>
+                                <div class="divide-y divide-gray-800">
+                                    <template x-for="entry in blacklist" :key="'bl_' + entry.id">
+                                        <div class="px-5 py-3 flex items-center justify-between text-sm hover:bg-gray-800/30">
+                                            <div>
+                                                <p class="font-mono font-bold text-red-300" x-text="entry.ip_address + '/' + entry.cidr_range"></p>
+                                                <p class="text-xs text-gray-400" x-text="entry.reason || 'Blacklisted'"></p>
+                                            </div>
+                                            <button @click="deleteIpListEntry(entry.id)"
+                                                class="text-xs text-gray-300 hover:text-white border border-gray-700 px-2 py-1 rounded">Remove</button>
+                                        </div>
+                                    </template>
+                                    <div x-show="blacklist.length === 0" class="px-5 py-8 text-center text-xs text-gray-500">
+                                        Blacklist is empty.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- GeoIP Sub-Tab -->
+                    <div x-show="rulesSubTab === 'geoip'" class="space-y-6">
+                        <div x-cloak x-show="!settings.geoip_enabled"
+                            class="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs">
+                            GeoLite2 MMDB database is currently not active on this node (`geoip_enabled: false`). Rules added here will still be saved and enforced once the GeoIP database is configured.
+                        </div>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <!-- Country Blocking -->
+                            <div class="bg-brand-light rounded-xl border border-gray-800 p-5 shadow-lg space-y-4">
+                                <h3 class="text-base font-bold text-white">Blocked Countries (ISO 3166-1 Alpha-2)</h3>
+                                <form @submit.prevent="addGeoRule()" class="flex gap-2">
+                                    <input type="text" maxlength="2" x-model="newGeoCountry" placeholder="Country code (e.g. CN, RU)"
+                                        class="flex-1 bg-brand-dark border border-gray-700 rounded-lg px-3.5 py-2 text-sm text-white uppercase focus:outline-none focus:border-cyan-500">
+                                    <button type="submit"
+                                        class="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2 rounded-lg text-sm transition">Block Country</button>
+                                </form>
+
+                                <div class="divide-y divide-gray-800 border border-gray-800 rounded-lg overflow-hidden">
+                                    <template x-for="gr in geoRules" :key="'geo_' + gr.country_code">
+                                        <div class="px-4 py-2.5 flex items-center justify-between text-sm bg-brand-dark/30">
+                                            <div class="flex items-center gap-3">
+                                                <span class="font-mono font-bold text-white bg-gray-800 px-2 py-0.5 rounded" x-text="gr.country_code"></span>
+                                                <span class="text-xs uppercase font-bold text-red-400" x-text="gr.action || 'block'"></span>
+                                            </div>
+                                            <button @click="deleteGeoRule(gr.country_code)"
+                                                class="text-xs text-gray-300 hover:text-white border border-gray-700 px-2.5 py-1 rounded">Unblock</button>
+                                        </div>
+                                    </template>
+                                    <div x-show="geoRules.length === 0" class="px-4 py-6 text-center text-xs text-gray-500">
+                                        No GeoIP country blocks configured.
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- GeoIP Lookup Tool -->
+                            <div class="bg-brand-light rounded-xl border border-gray-800 p-5 shadow-lg space-y-4 h-fit">
+                                <h3 class="text-base font-bold text-white">IP Geolocation Lookup</h3>
+                                <form @submit.prevent="lookupGeoIp()" class="flex gap-2">
+                                    <input type="text" x-model="geoLookupIp" placeholder="Enter IPv4 address (e.g. 8.8.8.8)"
+                                        class="flex-1 bg-brand-dark border border-gray-700 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
+                                    <button type="submit"
+                                        class="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-4 py-2 rounded-lg text-sm transition">Lookup</button>
+                                </form>
+                                <div x-cloak x-show="geoLookupResult"
+                                    class="p-4 rounded-lg bg-brand-dark border border-gray-800 text-sm space-y-1">
+                                    <p><span class="text-gray-500">IP:</span> <span class="font-mono text-white" x-text="geoLookupResult?.ip"></span></p>
+                                    <p><span class="text-gray-500">Country:</span> <span class="text-cyan-400 font-bold" x-text="(geoLookupResult?.country_code || '') + ' · ' + (geoLookupResult?.country_name || 'Unknown')"></span></p>
+                                    <p><span class="text-gray-500">City:</span> <span class="text-gray-300" x-text="geoLookupResult?.city || 'N/A'"></span></p>
+                                </div>
+                                <div x-cloak x-show="geoLookupError" class="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-xs" x-text="geoLookupError"></div>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Security Page -->
-                <div x-show="currentPage === 'security'" class="animate-fade-in"
-                    x-init="fetchSecurityStats(); fetchSecurityEvents(); fetchSecurityPolicies()">
-                    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                <!-- ===================== HOST SECURITY (TETRAGON) PAGE ===================== -->
+                <div x-show="currentPage === 'security'" x-cloak class="animate-fade-in space-y-6">
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
-                            <h4 class="text-gray-500 text-xs font-bold uppercase">Total Events</h4>
-                            <p class="text-2xl font-bold text-white mt-1" x-text="security.stats.total_events">0</p>
+                            <h4 class="text-gray-400 text-xs font-bold uppercase">Total Events (24h)</h4>
+                            <p class="text-2xl font-bold text-white mt-1 tabular-nums" x-text="security.stats.total_events">0</p>
                         </div>
                         <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
-                            <h4 class="text-gray-500 text-xs font-bold uppercase">Critical</h4>
-                            <p class="text-2xl font-bold text-red-500 mt-1" x-text="security.stats.critical_alerts">0
+                            <h4 class="text-gray-400 text-xs font-bold uppercase">Critical Alerts</h4>
+                            <p class="text-2xl font-bold text-red-400 mt-1 tabular-nums" x-text="security.stats.critical_alerts">0</p>
+                        </div>
+                        <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
+                            <h4 class="text-gray-400 text-xs font-bold uppercase">Blocked Executions</h4>
+                            <p class="text-2xl font-bold text-cyan-400 mt-1 tabular-nums" x-text="security.stats.events_blocked">0</p>
+                        </div>
+                        <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
+                            <h4 class="text-gray-400 text-xs font-bold uppercase">Tetragon Agent</h4>
+                            <p class="text-sm font-bold mt-2 flex items-center gap-1.5"
+                                :class="security.stats.tetragon_running ? 'text-emerald-400' : 'text-amber-400'">
+                                <span class="w-2 h-2 rounded-full" :class="security.stats.tetragon_running ? 'bg-emerald-400' : 'bg-amber-400'"></span>
+                                <span x-text="security.stats.tetragon_running ? 'RUNNING' : 'INACTIVE'"></span>
                             </p>
-                        </div>
-                        <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
-                            <h4 class="text-gray-500 text-xs font-bold uppercase">Blocked</h4>
-                            <p class="text-2xl font-bold text-cyan-500 mt-1" x-text="security.stats.events_blocked">0
-                            </p>
-                        </div>
-                        <div class="bg-brand-light rounded-xl p-4 border border-gray-800">
-                            <h4 class="text-gray-500 text-xs font-bold uppercase">Status</h4>
-                            <p class="text-sm font-bold mt-1"
-                                :class="security.stats.tetragon_running ? 'text-green-500' : 'text-red-500'"
-                                x-text="security.stats.tetragon_running ? 'RUNNING' : 'STOPPED'"></p>
                         </div>
                     </div>
 
-                    <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
-                        <div class="p-6 border-b border-gray-800 flex justify-between items-center bg-gray-900/40">
-                            <h3 class="text-lg font-bold text-white">Security Intelligence (Tetragon)</h3>
-                            <div class="flex gap-2">
+                    <!-- Security Sub-tabs -->
+                    <div class="flex flex-wrap gap-2 border-b border-gray-800 pb-3">
+                        <button @click="securitySubTab = 'events'"
+                            :class="securitySubTab === 'events' ? 'bg-brand-accent text-white border-cyan-500/40' : 'bg-brand-light text-gray-400 border-gray-800 hover:text-white'"
+                            class="px-4 py-2 rounded-lg text-sm font-semibold border transition">Runtime Events</button>
+                        <button @click="securitySubTab = 'policies'; fetchSecurityPolicies()"
+                            :class="securitySubTab === 'policies' ? 'bg-brand-accent text-white border-cyan-500/40' : 'bg-brand-light text-gray-400 border-gray-800 hover:text-white'"
+                            class="px-4 py-2 rounded-lg text-sm font-semibold border transition">
+                            Tracing Policies (<span x-text="security.policies.length"></span>)
+                        </button>
+                        <button @click="securitySubTab = 'logs'; fetchSecurityLogs()"
+                            :class="securitySubTab === 'logs' ? 'bg-brand-accent text-white border-cyan-500/40' : 'bg-brand-light text-gray-400 border-gray-800 hover:text-white'"
+                            class="px-4 py-2 rounded-lg text-sm font-semibold border transition">Agent Logs</button>
+                    </div>
+
+                    <!-- Events Panel -->
+                    <div x-show="securitySubTab === 'events'" class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                        <div class="p-5 border-b border-gray-800 flex flex-wrap justify-between items-center gap-3 bg-gray-900/40">
+                            <h3 class="text-base font-bold text-white">Runtime Process &amp; Syscall Events</h3>
+                            <div class="flex flex-wrap gap-2">
+                                <input type="text" x-model="security.filters.search" placeholder="Search process, command, policy..."
+                                    class="bg-brand-dark border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500 w-52">
                                 <select x-model="security.filters.severity" @change="fetchSecurityEvents()"
-                                    class="bg-brand-dark border border-gray-700 rounded px-2 py-1 text-xs text-white">
+                                    class="bg-brand-dark border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
                                     <option value="">All Severities</option>
                                     <option value="4">Critical</option>
                                     <option value="3">Error</option>
                                     <option value="2">Warning</option>
                                 </select>
                                 <button @click="fetchSecurityEvents()"
-                                    class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1 rounded text-xs transition">Refresh</button>
+                                    class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition">Refresh</button>
                             </div>
                         </div>
 
                         <div class="divide-y divide-gray-800 max-h-[600px] overflow-y-auto">
-                            <template x-for="event in security.events" :key="event.id">
+                            <template x-for="event in filteredSecurityEvents" :key="event.id">
                                 <div class="p-4 hover:bg-gray-800/20 transition-colors border-l-4" :class="{
                                     'border-red-600 bg-red-900/5': event.severity >= 4,
                                     'border-yellow-600 bg-yellow-900/5': event.severity == 3,
                                     'border-cyan-600': event.severity < 3
                                 }">
-                                    <div class="flex justify-between items-start mb-2">
+                                    <div class="flex flex-wrap justify-between items-start gap-2 mb-1.5">
                                         <div class="flex items-center gap-2">
                                             <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase" :class="{
                                                 'bg-red-600 text-white': event.severity >= 4,
@@ -384,165 +1071,341 @@
                                             <span class="text-white font-mono text-sm font-bold"
                                                 x-text="event.binary_path || event.process_name"></span>
                                         </div>
-                                        <span class="text-gray-500 text-[10px] font-mono"
+                                        <span class="text-gray-500 text-xs font-mono"
                                             x-text="new Date(event.timestamp / 1000000).toLocaleString()"></span>
                                     </div>
-                                    <div class="text-xs text-gray-400 mb-2">
-                                        <span class="text-gray-500">PID:</span> <span class="text-gray-300"
-                                            x-text="event.pid"></span> |
-                                        <span class="text-gray-500">Policy:</span> <span class="text-gray-300"
-                                            x-text="event.policy_name || 'N/A'"></span>
+                                    <div class="text-xs text-gray-400 mb-1.5">
+                                        <span class="text-gray-500">PID:</span> <span class="text-gray-300 font-mono" x-text="event.pid"></span> &bull;
+                                        <span class="text-gray-500">Policy:</span> <span class="text-gray-300" x-text="event.policy_name || 'N/A'"></span>
+                                        <template x-if="event.file_path">
+                                            <span> &bull; <span class="text-gray-500">File:</span> <span class="font-mono text-gray-300" x-text="event.file_path"></span></span>
+                                        </template>
                                     </div>
                                     <div x-show="event.command"
-                                        class="bg-black/40 p-2 rounded font-mono text-xs text-cyan-300/80 mt-1 border border-gray-800/50"
+                                        class="bg-black/40 p-2 rounded font-mono text-xs text-cyan-300/80 border border-gray-800/50 break-all"
                                         x-text="'$ ' + event.command"></div>
                                 </div>
                             </template>
-                            <div x-show="security.events.length === 0" class="p-12 text-center text-gray-500">
-                                <p>No security events detected</p>
+                            <div x-show="filteredSecurityEvents.length === 0" class="p-12 text-center text-sm text-gray-500">
+                                No security events detected.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Policies Panel -->
+                    <div x-show="securitySubTab === 'policies'" class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                        <div class="p-5 border-b border-gray-800 flex justify-between items-center">
+                            <div>
+                                <h3 class="text-base font-bold text-white">Tetragon TracingPolicies (YAML)</h3>
+                                <p class="text-xs text-gray-400">Inspect, edit, create, and deploy kernel tracing policies.</p>
+                            </div>
+                            <button @click="openNewPolicyModal()"
+                                class="bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold px-3.5 py-2 rounded-lg transition">+ New Policy</button>
+                        </div>
+                        <div class="divide-y divide-gray-800">
+                            <template x-for="pol in security.policies" :key="pol.name">
+                                <div class="p-4 flex flex-wrap items-center justify-between gap-3 hover:bg-gray-800/30">
+                                    <div>
+                                        <div class="flex items-center gap-2">
+                                            <span class="font-mono font-bold text-white text-sm" x-text="pol.name"></span>
+                                            <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full"
+                                                :class="pol.deployed ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-700 text-gray-400'"
+                                                x-text="pol.deployed ? 'Deployed' : 'Template'"></span>
+                                        </div>
+                                        <p class="text-xs text-gray-500 mt-0.5"
+                                            x-text="pol.filename + (pol.size ? ' · ' + formatBytes(pol.size) : '')"></p>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <button @click="editPolicy(pol.name)"
+                                            class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded border border-gray-700 font-semibold">Edit YAML</button>
+                                        <button @click="deployPolicy(pol.name)"
+                                            class="text-xs bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 border border-cyan-500/40 px-3 py-1.5 rounded font-semibold">Deploy</button>
+                                        <button @click="deletePolicy(pol.name)"
+                                            class="text-xs text-red-400 hover:text-red-300 border border-red-500/30 px-2.5 py-1.5 rounded font-semibold">Delete</button>
+                                    </div>
+                                </div>
+                            </template>
+                            <div x-show="security.policies.length === 0" class="p-10 text-center text-xs text-gray-500">
+                                No policy templates found.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Agent Logs Panel -->
+                    <div x-show="securitySubTab === 'logs'" class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                        <div class="p-5 border-b border-gray-800 flex justify-between items-center">
+                            <h3 class="text-base font-bold text-white">Tetragon Agent JSON Logs (Latest 100)</h3>
+                            <button @click="fetchSecurityLogs()"
+                                class="text-xs bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg border border-gray-700 font-semibold">Reload</button>
+                        </div>
+                        <div class="p-4 bg-black/50 font-mono text-xs text-gray-300 max-h-[550px] overflow-y-auto space-y-2">
+                            <template x-for="(entry, idx) in security.logs" :key="idx">
+                                <div class="p-2 rounded bg-brand-dark/80 border border-gray-800/80 break-all"
+                                    x-text="JSON.stringify(entry)"></div>
+                            </template>
+                            <div x-show="security.logs.length === 0" class="py-10 text-center text-gray-500">
+                                No raw Tetragon logs found at `/var/log/tetragon/tetragon.log`.
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Settings Page -->
-                <div x-show="currentPage === 'settings'" class="animate-fade-in" x-init="fetchSettings()">
-                    <div class="max-w-4xl mx-auto space-y-6">
-                        <!-- System Stats -->
-                        <div class="bg-brand-light rounded-xl p-6 border border-gray-800 shadow-lg">
-                            <h3 class="text-lg font-bold text-white mb-6">System Configuration</h3>
+                <!-- ===================== SETTINGS & API KEYS PAGE ===================== -->
+                <div x-show="currentPage === 'settings'" x-cloak class="animate-fade-in max-w-5xl mx-auto space-y-6">
+                    <!-- Node Summary -->
+                    <div class="bg-brand-light rounded-xl p-6 border border-gray-800 shadow-lg">
+                        <h3 class="text-base font-bold text-white mb-4">Node &amp; Data Plane Status</h3>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3.5">
+                                <p class="text-[11px] uppercase font-bold text-gray-500">Interface</p>
+                                <p class="text-sm font-mono font-bold text-white mt-1" x-text="settings.interface"></p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3.5">
+                                <p class="text-[11px] uppercase font-bold text-gray-500">XDP Mode</p>
+                                <p class="text-sm font-mono font-bold text-cyan-400 mt-1" x-text="settings.xdp_mode || (settings.dry_run ? 'Dry Run' : 'Attached')"></p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3.5">
+                                <p class="text-[11px] uppercase font-bold text-gray-500">HTTP / WS Ports</p>
+                                <p class="text-sm font-mono font-bold text-white mt-1" x-text="settings.http_port + ' / ' + settings.ws_port"></p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3.5">
+                                <p class="text-[11px] uppercase font-bold text-gray-500">GeoIP Database</p>
+                                <p class="text-sm font-bold mt-1"
+                                    :class="settings.geoip_enabled ? 'text-emerald-400' : 'text-gray-400'"
+                                    x-text="settings.geoip_enabled ? 'ACTIVE' : 'NOT LOADED'"></p>
+                            </div>
+                        </div>
+                    </div>
 
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-400 mb-2">Protective
-                                        Interface</label>
-                                    <input type="text" :value="settings.interface" readonly
-                                        class="w-full bg-brand-dark/50 border border-gray-800 rounded-lg px-4 py-2 text-gray-300 font-mono text-sm cursor-not-allowed">
-                                </div>
-                                <!-- Add more settings here if needed -->
+                    <!-- DDoS Detection & Auto-Mitigation Form -->
+                    <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg p-6">
+                        <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+                            <div>
+                                <h3 class="text-lg font-bold text-white">DDoS Detection &amp; Auto-Mitigation Thresholds</h3>
+                                <p class="text-xs text-gray-400">Changes persist in encrypted database and update the XDP `config_map` immediately without packet loss.</p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs text-gray-500">Presets:</span>
+                                <button type="button" @click="applySettingsPreset('strict')"
+                                    class="text-xs bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-500/30 px-2.5 py-1 rounded font-semibold transition">Strict</button>
+                                <button type="button" @click="applySettingsPreset('balanced')"
+                                    class="text-xs bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 px-2.5 py-1 rounded font-semibold transition">Balanced</button>
+                                <button type="button" @click="applySettingsPreset('high')"
+                                    class="text-xs bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border border-purple-500/30 px-2.5 py-1 rounded font-semibold transition">High-BW</button>
                             </div>
                         </div>
 
-                        <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg p-8">
-                            <h3 class="text-xl font-bold text-white mb-8">Feature Toggles</h3>
-
-                            <div class="space-y-6">
-                                <div
-                                    class="flex items-center justify-between p-4 bg-brand-dark/30 rounded-lg border border-gray-800">
-                                    <div>
-                                        <p class="text-white font-medium">GeoIP Protection</p>
-                                        <p class="text-xs text-gray-500"
-                                            x-text="settings.geoip_enabled ? 'Geo-fencing active' : 'Database not found - protection disabled'">
-                                        </p>
-                                    </div>
-                                    <div :class="settings.geoip_enabled ? 'bg-cyan-500/20 text-cyan-400' : 'bg-gray-500/20 text-gray-400'"
-                                        class="px-3 py-1 rounded-full text-xs font-bold"
-                                        x-text="settings.geoip_enabled ? 'ACTIVE' : 'INACTIVE'"></div>
+                        <form @submit.prevent="saveSettings()" class="space-y-6">
+                            <!-- Auto-Block Toggle -->
+                            <div class="flex flex-wrap items-center justify-between gap-4 p-4 bg-brand-dark/50 rounded-xl border border-gray-800">
+                                <div>
+                                    <h4 class="text-sm font-bold text-white">Dynamic Kernel Auto-Blocking</h4>
+                                    <p class="text-xs text-gray-400">Immediately ban attacking IPs at XDP entry for the configured duration instead of letting 1-second window resets leak bursts.</p>
                                 </div>
-
-                                <div class="flex items-center justify-between">
-                                    <div>
-                                        <h4 class="text-white font-medium">Intrusion Prevention System</h4>
-                                        <p class="text-xs text-gray-500">Automatically block high-risk IPs and patterns.
-                                        </p>
+                                <div class="flex items-center gap-4">
+                                    <div class="flex items-center gap-2">
+                                        <label class="text-xs text-gray-400">Ban Duration (s)</label>
+                                        <input type="number" min="0" max="604800" x-model.number="settings.auto_block_duration_sec"
+                                            class="w-24 bg-brand-light border border-gray-700 rounded-lg px-2.5 py-1.5 text-sm text-white font-mono">
                                     </div>
-                                    <button @click="settings.ips_enabled = !settings.ips_enabled"
-                                        :class="settings.ips_enabled ? 'bg-cyan-600' : 'bg-gray-700'"
-                                        class="w-12 h-6 rounded-full relative transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500">
-                                        <span :class="settings.ips_enabled ? 'translate-x-6' : 'translate-x-1'"
-                                            class="absolute left-0 top-1 h-4 w-4 rounded-full bg-white shadow-md transform transition-transform"></span>
+                                    <button type="button" @click="settings.auto_block_enabled = !settings.auto_block_enabled"
+                                        :class="settings.auto_block_enabled ? 'bg-cyan-600' : 'bg-gray-700'"
+                                        class="w-12 h-6 rounded-full relative transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                                        aria-label="Toggle Dynamic Auto-Blocking">
+                                        <span :class="settings.auto_block_enabled ? 'translate-x-6' : 'translate-x-1'"
+                                            class="absolute left-0 top-1 h-4 w-4 rounded-full bg-white shadow transform transition-transform"></span>
                                     </button>
                                 </div>
                             </div>
 
-                            <div class="pt-6 border-t border-gray-800 mt-8">
-                                <button
-                                    class="bg-gray-800 hover:bg-gray-700 text-gray-200 font-bold px-6 py-2 rounded-lg transition">Apply
-                                    All Changes</button>
+                            <!-- Per-IP & Global Threshold Inputs -->
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">SYN Flood Rate (SYN/s per IP)</label>
+                                    <input type="number" min="1" max="10000000" x-model.number="settings.syn_flood_rate"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">UDP Flood Rate (PPS per IP)</label>
+                                    <input type="number" min="1" max="10000000" x-model.number="settings.udp_flood_rate"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">ICMP Flood Rate (PPS per IP)</label>
+                                    <input type="number" min="1" max="10000000" x-model.number="settings.icmp_flood_rate"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">DNS/NTP Amp Rate (PPS per IP)</label>
+                                    <input type="number" min="1" max="10000000" x-model.number="settings.dns_amp_rate"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Max Fragments (30s Window)</label>
+                                    <input type="number" min="1" max="100000" x-model.number="settings.max_frags"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Max DNS Resp Bytes</label>
+                                    <input type="number" min="64" max="65535" x-model.number="settings.max_dns_response_size"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Global SYN Guard (SYN/s)</label>
+                                    <input type="number" min="0" max="50000000" x-model.number="settings.global_syn_rate"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Global UDP Guard (PPS)</label>
+                                    <input type="number" min="0" max="50000000" x-model.number="settings.global_udp_rate"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
+                                </div>
                             </div>
-                        </div>
+
+                            <div class="pt-4 border-t border-gray-800 flex justify-end">
+                                <button type="submit" :disabled="savingSettings"
+                                    class="bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-60 text-white font-bold px-6 py-2.5 rounded-lg shadow-lg transition">
+                                    <span x-text="savingSettings ? 'Applying...' : 'Save & Apply to Kernel'"></span>
+                                </button>
+                            </div>
+                        </form>
                     </div>
 
                     <!-- API Access Management -->
-                    <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg p-8" x-init="fetchApiKeys()">
-                        <div class="flex justify-between items-center mb-6">
-                            <h3 class="text-xl font-bold text-white">API Access Management</h3>
-                        </div>
+                    <div class="bg-brand-light rounded-xl border border-gray-800 shadow-lg p-6 space-y-6">
+                        <h3 class="text-lg font-bold text-white">API Access Management</h3>
 
-                        <!-- Generator Form -->
-                        <div class="bg-gray-900/50 p-6 rounded-lg border border-gray-800 mb-8">
-                            <h4 class="text-gray-300 font-bold mb-4">Generate New API Key</h4>
-                            <div class="flex gap-4 items-end">
-                                <div class="flex-1">
-                                    <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Key Name</label>
-                                    <input type="text" x-model="newApiKey.name" placeholder="e.g. CI/CD Pipeline"
-                                        class="w-full bg-gray-900 border border-gray-800 rounded px-3 py-2 text-white text-sm focus:border-cyan-500 focus:outline-none">
-                                </div>
-                                <div class="w-32">
-                                    <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Expires
-                                        (Days)</label>
-                                    <input type="number" x-model.number="newApiKey.expires_in_days"
-                                        placeholder="0 (Never)"
-                                        class="w-full bg-gray-900 border border-gray-800 rounded px-3 py-2 text-white text-sm focus:border-cyan-500 focus:outline-none">
-                                </div>
-                                <button @click="createApiKey()"
-                                    class="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-4 py-2 rounded text-sm transition shadow-lg shadow-cyan-500/20">Generate
-                                    Key</button>
+                        <form @submit.prevent="createApiKey()" class="bg-gray-900/50 p-5 rounded-xl border border-gray-800 grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                            <div class="md:col-span-2">
+                                <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Key Name</label>
+                                <input type="text" x-model="newApiKey.name" placeholder="e.g. Prometheus / CI Automation" required
+                                    class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:border-cyan-500 focus:outline-none">
                             </div>
-                        </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Expires (Days, 0 = Never)</label>
+                                <input type="number" min="0" x-model.number="newApiKey.expires_in_days"
+                                    class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:border-cyan-500 focus:outline-none">
+                            </div>
+                            <button type="submit"
+                                class="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-4 py-2 rounded-lg text-sm transition shadow-lg">Generate Key</button>
+                        </form>
 
-                        <!-- Key List -->
-                        <table class="w-full text-left text-sm">
-                            <thead class="bg-gray-900/50 text-gray-400 text-xs uppercase tracking-wider">
-                                <tr>
-                                    <th class="px-4 py-3 font-medium">Name</th>
-                                    <th class="px-4 py-3 font-medium">Prefix</th>
-                                    <th class="px-4 py-3 font-medium">Expires</th>
-                                    <th class="px-4 py-3 font-medium text-right">Action</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-gray-800">
-                                <template x-for="key in apiKeys" :key="key.id">
-                                    <tr class="hover:bg-gray-800/30 transition-colors">
-                                        <td class="px-4 py-3 font-medium text-white" x-text="key.name"></td>
-                                        <td class="px-4 py-3 font-mono text-cyan-400 text-xs"
-                                            x-text="key.prefix + '...'"></td>
-                                        <td class="px-4 py-3 text-gray-400"
-                                            x-text="key.expires_at === 0 ? 'Never' : new Date(key.expires_at * 1000).toLocaleDateString()">
-                                        </td>
-                                        <td class="px-4 py-3 text-right">
-                                            <button @click="deleteApiKey(key.id)"
-                                                class="text-red-500 hover:text-red-400 font-bold text-xs uppercase transition">Revoke</button>
-                                        </td>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left text-sm">
+                                <thead class="bg-gray-900/60 text-gray-400 text-xs uppercase tracking-wider">
+                                    <tr>
+                                        <th class="px-4 py-3 font-semibold">Name</th>
+                                        <th class="px-4 py-3 font-semibold">Prefix</th>
+                                        <th class="px-4 py-3 font-semibold">Expires</th>
+                                        <th class="px-4 py-3 font-semibold text-right">Action</th>
                                     </tr>
-                                </template>
-                            </tbody>
-                        </table>
-                    </div>
-
-                </div>
-
-                <!-- API Key Success Modal -->
-                <div x-show="generatedKey"
-                    class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-                    <div
-                        class="bg-brand-light border border-gray-700 rounded-xl shadow-2xl max-w-lg w-full p-8 relative">
-                        <h3 class="text-2xl font-bold text-white mb-2">API Key Generated</h3>
-                        <p class="text-gray-400 text-sm mb-6">Please copy this key immediately. You will not be able to
-                            see it again.</p>
-
-                        <div
-                            class="bg-gray-900/80 border border-gray-800 rounded-lg p-4 mb-6 flex items-center justify-between group">
-                            <code class="font-mono text-cyan-400 text-lg break-all select-all block mr-2"
-                                x-text="generatedKey"></code>
-                            <button @click="navigator.clipboard.writeText(generatedKey); $el.innerText = 'Copied!'"
-                                class="text-gray-500 hover:text-white text-xs font-bold uppercase transition">Copy</button>
+                                </thead>
+                                <tbody class="divide-y divide-gray-800">
+                                    <template x-for="key in apiKeys" :key="key.id">
+                                        <tr class="hover:bg-gray-800/30 transition-colors">
+                                            <td class="px-4 py-3 font-medium text-white" x-text="key.name"></td>
+                                            <td class="px-4 py-3 font-mono text-cyan-400 text-xs" x-text="key.prefix + '...'"></td>
+                                            <td class="px-4 py-3 text-gray-400 text-xs"
+                                                x-text="key.expires_at === 0 ? 'Never' : new Date(key.expires_at * 1000).toLocaleDateString()"></td>
+                                            <td class="px-4 py-3 text-right">
+                                                <button @click="deleteApiKey(key.id)"
+                                                    class="text-red-400 hover:text-red-300 font-bold text-xs uppercase transition">Revoke</button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                    <tr x-show="apiKeys.length === 0">
+                                        <td colspan="4" class="px-4 py-6 text-center text-xs text-gray-500">No API keys created yet.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </div>
-
-                        <button @click="generatedKey = null"
-                            class="w-full bg-gray-800 hover:bg-gray-700 text-white font-bold py-3 rounded-lg transition">I
-                            have saved this key</button>
                     </div>
                 </div>
+            </div>
+        </main>
+
+        <!-- ===================== MODALS & TOASTS ===================== -->
+
+        <!-- Policy YAML Editor Modal -->
+        <div x-cloak x-show="security.showModal"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+            <div @click.outside="security.showModal = false"
+                class="bg-brand-light border border-gray-700 rounded-xl shadow-2xl max-w-3xl w-full p-6 space-y-4">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-bold text-white" x-text="security.currentPolicy.isNew ? 'Create TracingPolicy' : ('Edit Policy: ' + security.currentPolicy.name)"></h3>
+                    <button @click="security.showModal = false" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Policy Name</label>
+                    <input type="text" x-model="security.currentPolicy.name" :readonly="!security.currentPolicy.isNew"
+                        :class="!security.currentPolicy.isNew ? 'opacity-70 cursor-not-allowed' : ''"
+                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">TracingPolicy YAML</label>
+                    <textarea x-model="security.currentPolicy.content" rows="14"
+                        class="w-full bg-black/60 border border-gray-700 rounded-lg p-3 text-xs font-mono text-cyan-200 focus:outline-none focus:border-cyan-500"></textarea>
+                </div>
+                <div class="flex justify-end gap-2">
+                    <button @click="security.showModal = false"
+                        class="bg-gray-800 hover:bg-gray-700 text-gray-200 px-4 py-2 rounded-lg text-sm font-semibold">Cancel</button>
+                    <button @click="savePolicy()"
+                        class="bg-cyan-600 hover:bg-cyan-500 text-white px-5 py-2 rounded-lg text-sm font-bold">Save Policy</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Key Success Modal -->
+        <div x-cloak x-show="generatedKey"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+            <div class="bg-brand-light border border-gray-700 rounded-xl shadow-2xl max-w-lg w-full p-7 relative">
+                <h3 class="text-xl font-bold text-white mb-2">API Key Generated</h3>
+                <p class="text-gray-400 text-sm mb-5">Copy this key now. For security, it cannot be displayed again after closing this window.</p>
+
+                <div class="bg-gray-900/80 border border-gray-800 rounded-lg p-4 mb-5 flex items-center justify-between gap-3">
+                    <code class="font-mono text-cyan-400 text-base break-all select-all" x-text="generatedKey"></code>
+                    <button @click="copyGeneratedKey()"
+                        class="bg-gray-800 hover:bg-gray-700 text-gray-200 px-3 py-1.5 rounded text-xs font-bold uppercase flex-shrink-0 transition"
+                        x-text="keyCopied ? 'Copied' : 'Copy'"></button>
+                </div>
+
+                <button @click="generatedKey = null"
+                    class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2.5 rounded-lg transition">I have saved this key</button>
+            </div>
+        </div>
+
+        <!-- Sponsorship / About Modal -->
+        <div x-cloak x-show="sponsorshipModalOpen"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+            <div @click.outside="sponsorshipModalOpen = false"
+                class="bg-brand-light border border-gray-700 rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-bold text-white">Cyrenus Protection Engine</h3>
+                    <button @click="sponsorshipModalOpen = false" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+                </div>
+                <p class="text-sm text-gray-300 leading-relaxed">
+                    Cyrenus pairs an XDP/eBPF L3/L4 mitigation pipeline with Tetragon runtime host security monitoring and encrypted SQLCipher persistence.
+                </p>
+                <div class="text-xs text-gray-400 bg-brand-dark/60 border border-gray-800 rounded-lg p-3 space-y-1">
+                    <p><span class="text-gray-500">Version:</span> 2.0.0</p>
+                    <p><span class="text-gray-500">Interface:</span> <span class="font-mono text-white" x-text="systemStats.interface"></span> (<span x-text="systemStats.xdp_mode"></span>)</p>
+                </div>
+                <button @click="sponsorshipModalOpen = false"
+                    class="w-full bg-gray-800 hover:bg-gray-700 text-white font-bold py-2 rounded-lg text-sm transition">Close</button>
+            </div>
+        </div>
+
+        <!-- Toast Notifications Stack -->
+        <div x-cloak class="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm w-full pointer-events-none px-4 sm:px-0">
+            <template x-for="note in notifications" :key="note.id">
+                <div class="pointer-events-auto rounded-xl px-4 py-3 shadow-2xl border backdrop-blur-md flex items-start justify-between gap-3 animate-fade-in text-sm"
+                    :class="note.type === 'error' ? 'bg-red-950/90 border-red-500/50 text-red-100' : (note.type === 'success' ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-100' : 'bg-brand-light/95 border-cyan-500/40 text-gray-100')">
+                    <span class="leading-snug" x-text="note.message"></span>
+                    <button @click="dismissNotification(note.id)" class="text-gray-400 hover:text-white font-bold leading-none">&times;</button>
+                </div>
+            </template>
+        </div>
+    </div>
+</body>
 
 </html>
