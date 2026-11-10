@@ -4,7 +4,22 @@
 #include <linux/in.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
+/*
+ * Linux UAPI <linux/icmp.h> includes <linux/if.h>, which pulls in glibc
+ * <sys/socket.h> -> <gnu/stubs-32.h> under `clang -target bpf` without
+ * multilib headers. Provide IFNAMSIZ (used only by icmp_ext_echo_iio) and
+ * skip <linux/if.h> when including <linux/icmp.h> for BPF.
+ */
+#ifndef IFNAMSIZ
+#define IFNAMSIZ 16
+#endif
+#ifndef _LINUX_IF_H
+#define _LINUX_IF_H
 #include <linux/icmp.h>
+#undef _LINUX_IF_H
+#else
+#include <linux/icmp.h>
+#endif
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 #include "../include/common.h"
@@ -670,35 +685,6 @@ static __always_inline int early_filter(struct iphdr *iph, __u8 proto, __u16 src
     }
 
     return XDP_PASS;
-}
-
-static __always_inline int rate_limit(__u32 ip) {
-    struct token_bucket_t *bucket, new_bucket = {0};
-    
-    bucket = bpf_map_lookup_elem(&token_buckets, &ip);
-    if (!bucket) {
-        new_bucket.last_update = bpf_ktime_get_ns();
-        new_bucket.tokens = MAX_TOKENS;
-        bpf_map_update_elem(&token_buckets, &ip, &new_bucket, BPF_ANY);
-        return XDP_PASS;
-    }
-
-    __u64 now = bpf_ktime_get_ns();
-    __u64 elapsed = now - bucket->last_update;
-    __u32 new_tokens = bucket->tokens + (elapsed * TOKENS_PER_SECOND / 1000000000);
-    
-    if (new_tokens > MAX_TOKENS) {
-        new_tokens = MAX_TOKENS;
-    }
-
-    if (new_tokens >= 1) {
-        new_tokens -= 1;
-        bucket->tokens = new_tokens;
-        bucket->last_update = now;
-        return XDP_PASS;
-    } else {
-        return XDP_DROP;
-    }
 }
 
 static __always_inline int check_geoip(__u32 src_ip) {

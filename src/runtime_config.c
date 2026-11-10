@@ -118,6 +118,9 @@ int runtime_config_parse_args(int argc, char **argv, struct runtime_config *rc) 
     
     int opt;
     int option_index = 0;
+
+    // Reset getopt state so runtime_config_parse_args can safely re-apply CLI overrides after config file load
+    optind = 1;
     
     while ((opt = getopt_long(argc, argv, "i:p:c:d:g:k:u:P:DvVe:l:L:h", 
                               long_options, &option_index)) != -1) {

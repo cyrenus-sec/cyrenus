@@ -811,7 +811,7 @@ int database_get_security_stats(struct database *db, time_t from, time_t to,
         "SELECT "
         "COUNT(*) as total, "
         "SUM(CASE WHEN severity = 4 THEN 1 ELSE 0 END) as critical, "
-        "SUM(CASE WHEN action IN ('Sigkill', 'block') THEN 1 ELSE 0 END) as blocked "
+        "SUM(CASE WHEN action IN ('Sigkill', 'KPROBE_ACTION_SIGKILL', 'block') THEN 1 ELSE 0 END) as blocked "
         "FROM security_events "
         "WHERE timestamp >= ? AND timestamp <= ?";
     

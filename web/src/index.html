@@ -379,7 +379,7 @@
                                                 'bg-gray-700 text-gray-300': event.severity < 3
                                             }"
                                                 x-text="event.severity >= 4 ? 'Critical' : (event.severity == 3 ? 'Error' : 'Warning')"></span>
-                                            <span x-show="event.action === 'Sigkill' || event.action === 'block'"
+                                            <span x-show="event.action === 'Sigkill' || event.action === 'KPROBE_ACTION_SIGKILL' || event.action === 'block'"
                                                 class="bg-cyan-900/50 text-cyan-400 border border-cyan-500/30 px-2 py-0.5 rounded text-[10px] font-bold uppercase">Blocked</span>
                                             <span class="text-white font-mono text-sm font-bold"
                                                 x-text="event.binary_path || event.process_name"></span>
