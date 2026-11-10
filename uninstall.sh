@@ -143,6 +143,8 @@ if command_exists tetra; then
         
         # Try to remove known Cyrenus policies
         POLICY_NAMES=(
+            "anti-rce-protection"
+            "file-integrity-monitoring"
             "process-monitoring"
             "network-monitoring"
             "file-monitoring"

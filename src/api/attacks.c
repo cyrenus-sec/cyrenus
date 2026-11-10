@@ -42,10 +42,12 @@ enum MHD_Result api_attacks_list(struct MHD_Connection *connection,
             char ip_str[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &(attacks[i].src_ip), ip_str, sizeof(ip_str));
             
+            const char *proto_label = attacks[i].attack_type[0] ? attacks[i].attack_type : get_proto_name(attacks[i].protocol);
             json_object_object_add(json_attack, "id", json_object_new_int(i)); // Use index as ID for now
             json_object_object_add(json_attack, "timestamp", json_object_new_string(time_str));
             json_object_object_add(json_attack, "src_ip", json_object_new_string(ip_str));
-            json_object_object_add(json_attack, "protocol", json_object_new_string(get_proto_name(attacks[i].protocol)));
+            json_object_object_add(json_attack, "protocol", json_object_new_string(proto_label));
+            json_object_object_add(json_attack, "attack_type", json_object_new_string(proto_label));
             json_object_object_add(json_attack, "packets", json_object_new_int(attacks[i].packets));
             json_object_object_add(json_attack, "bytes", json_object_new_int64(attacks[i].bytes));
             

@@ -1,6 +1,8 @@
 # Compiler for user-space programs
 CC = gcc
-CFLAGS = -I./include -I/usr/include/bpf -I/usr/include/json-c -Wall -Werror
+SQLCIPHER_CFLAGS := $(shell pkg-config --cflags sqlcipher 2>/dev/null || echo "-I/usr/include/sqlcipher")
+SQLCIPHER_LIBS := $(shell pkg-config --libs sqlcipher 2>/dev/null || echo "-lsqlcipher")
+CFLAGS = -I./include -I/usr/include/bpf -I/usr/include/json-c $(SQLCIPHER_CFLAGS) -DSQLITE_HAS_CODEC -Wall -Werror
 # Detect architecture
 ARCH := $(shell uname -m)
 ifeq ($(ARCH),x86_64)
@@ -16,10 +18,10 @@ endif
 
 # Compiler for eBPF programs
 CLANG = clang
-BPF_CFLAGS = -target bpf -I./include -I/usr/include/bpf -Wall -O2 -D__TARGET_ARCH_$(BPF_ARCH) -I/usr/include/$(shell uname -m)-linux-gnu -g
+BPF_CFLAGS = -target bpf -mcpu=v3 -I./include -I/usr/include/bpf -Wall -Werror -O2 -D__TARGET_ARCH_$(BPF_ARCH) -I/usr/include/$(ARCH)-linux-gnu -g
 
 # Linker flags for user-space programs
-LDFLAGS = -lbpf -lelf -lz -lcurl -lpthread -lmicrohttpd -lconfig -ljson-c -luuid -lcrypto -lwebsockets -lsqlcipher -lmaxminddb
+LDFLAGS = -lbpf -lelf -lz -lcurl -lpthread -lmicrohttpd -lconfig -ljson-c -luuid -lcrypto -lwebsockets $(SQLCIPHER_LIBS) -lmaxminddb
 
 # Source files
 KERNEL_SRC = ebpf/xdp_prog.c
@@ -36,7 +38,7 @@ USER_OBJ = build/cyrenus
 all: frontend $(KERNEL_OBJ) $(USER_OBJ)
 
 frontend:
-	./web/build.sh
+	bash ./web/build.sh
 
 $(KERNEL_OBJ): $(KERNEL_SRC)
 	@mkdir -p build

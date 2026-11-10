@@ -3,9 +3,24 @@
 #include <time.h>
 #include <openssl/sha.h>
 #include <openssl/rand.h>
+#include <openssl/crypto.h>
+#include <openssl/evp.h>
 #include <uuid/uuid.h>
 #include "../../include/api_handlers.h"
 #include "../../include/database.h"
+
+// Constant-time string equality check via SHA-256 + CRYPTO_memcmp (avoids timing & length leaks)
+static int secure_str_equals(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    unsigned char hash_a[EVP_MAX_MD_SIZE];
+    unsigned char hash_b[EVP_MAX_MD_SIZE];
+    unsigned int len_a = 0, len_b = 0;
+
+    if (!EVP_Digest(a, strlen(a), hash_a, &len_a, EVP_sha256(), NULL)) return 0;
+    if (!EVP_Digest(b, strlen(b), hash_b, &len_b, EVP_sha256(), NULL)) return 0;
+    if (len_a != len_b) return 0;
+    return CRYPTO_memcmp(hash_a, hash_b, len_a) == 0;
+}
 
 // Helper: Create a new session
 static char* create_session(struct database *db, const char* username) {
@@ -21,24 +36,35 @@ static char* create_session(struct database *db, const char* username) {
     time_t now = time(NULL);
     session.expires_at = now + 3600; // 1 hour expiry
     
-    // Generate secure token
-    char data[256];
+    // Generate secure token mixing CSPRNG random_bytes + context metadata
     unsigned char random_bytes[32];
-    RAND_bytes(random_bytes, sizeof(random_bytes));
-    
-    snprintf(data, sizeof(data), "%s%s%ld", username, session.session_id, now);
-    
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256((unsigned char*)data, strlen(data), hash);
-    
-    // Convert hash to hex string for token base
-    char hash_hex[65];
-    for(int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        sprintf(hash_hex + (i * 2), "%02x", hash[i]);
+    if (RAND_bytes(random_bytes, sizeof(random_bytes)) != 1) {
+        return NULL;
     }
-    
-    // Combine hash with random bytes for final token (simplified)
-    snprintf(session.token, sizeof(session.token), "%s", hash_hex);
+
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len = 0;
+    EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+    if (!mdctx) return NULL;
+
+    char meta[192];
+    snprintf(meta, sizeof(meta), "%s|%s|%lld", username, session.session_id, (long long)now);
+
+    int ok = EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL) == 1 &&
+             EVP_DigestUpdate(mdctx, random_bytes, sizeof(random_bytes)) == 1 &&
+             EVP_DigestUpdate(mdctx, meta, strlen(meta)) == 1 &&
+             EVP_DigestFinal_ex(mdctx, hash, &hash_len) == 1;
+    EVP_MD_CTX_free(mdctx);
+    OPENSSL_cleanse(random_bytes, sizeof(random_bytes));
+
+    if (!ok || hash_len != SHA256_DIGEST_LENGTH) {
+        return NULL;
+    }
+
+    for (unsigned int i = 0; i < hash_len; i++) {
+        sprintf(session.token + (i * 2), "%02x", hash[i]);
+    }
+    session.token[64] = '\0';
     
     if (database_insert_session(db, &session) != 0) {
         return NULL;
@@ -54,6 +80,15 @@ enum MHD_Result api_auth_login(struct MHD_Connection *connection,
     
     struct MHD_Response *response;
     enum MHD_Result ret;
+
+    if (!upload_data || size == 0) {
+        const char *err = "{\"error\":\"Missing request body\"}";
+        response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(response, "Content-Type", "application/json");
+        ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
+        MHD_destroy_response(response);
+        return ret;
+    }
     
     json_object *root = json_tokener_parse(upload_data);
     if (!root) {
@@ -80,10 +115,10 @@ enum MHD_Result api_auth_login(struct MHD_Connection *connection,
     const char *username = json_object_get_string(j_username);
     const char *password = json_object_get_string(j_password);
     
-    // Validate credentials against runtime config
-    // In production, this should verify against a users table with hashed passwords
-    if (strcmp(username, ctx->config->username) == 0 && 
-        strcmp(password, ctx->config->password) == 0) {
+    // Validate credentials in constant time against runtime config
+    if (username && password && ctx && ctx->config &&
+        secure_str_equals(username, ctx->config->username) &&
+        secure_str_equals(password, ctx->config->password)) {
         
         char *token = create_session(ctx->db, username);
         if (token) {
@@ -162,8 +197,13 @@ enum MHD_Result api_auth_verify(struct MHD_Connection *connection,
 enum MHD_Result api_auth_logout(struct MHD_Connection *connection, 
                                 struct api_context *ctx,
                                 const char *token) {
-    // In a real implementation we would delete the session from DB
-    // For now success
+    if (token && ctx && ctx->db) {
+        if (strncmp(token, "Bearer ", 7) == 0) {
+            token += 7;
+        }
+        database_delete_session(ctx->db, token);
+    }
+
     struct MHD_Response *response;
     const char *msg = "{\"status\":\"logged out\"}";
     response = MHD_create_response_from_buffer(strlen(msg), (void*)msg, MHD_RESPMEM_MUST_COPY);

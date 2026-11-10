@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <sys/inotify.h>
 #include <sys/stat.h>
+#include <arpa/inet.h>
 #include <errno.h>
 #include <time.h>
 
@@ -20,7 +21,24 @@ static struct {
     int running;
     struct tetragon_stats stats;
     pthread_mutex_t stats_mutex;
-} tetragon_state = {0};
+} tetragon_state = { .inotify_fd = -1, .watch_fd = -1 };
+
+static void safe_copy_json_str(struct json_object *obj, char *dst, size_t dst_size) {
+    if (!obj || !dst || dst_size == 0) return;
+    const char *s = json_object_get_string(obj);
+    if (s) {
+        strncpy(dst, s, dst_size - 1);
+        dst[dst_size - 1] = '\0';
+    }
+}
+
+static void extract_process_name_from_path(const char *path, char *out, size_t out_size) {
+    if (!path || !path[0] || !out || out_size == 0) return;
+    const char *slash = strrchr(path, '/');
+    const char *base = slash ? slash + 1 : path;
+    strncpy(out, base, out_size - 1);
+    out[out_size - 1] = '\0';
+}
 
 // Initialize Tetragon event monitoring
 int tetragon_init(const char *log_file_path) {
@@ -30,6 +48,7 @@ int tetragon_init(const char *log_file_path) {
     }
     
     strncpy(tetragon_state.log_file_path, log_file_path, MAX_FILE_PATH - 1);
+    tetragon_state.log_file_path[MAX_FILE_PATH - 1] = '\0';
     
     // Initialize mutex
     if (pthread_mutex_init(&tetragon_state.stats_mutex, NULL) != 0) {
@@ -43,6 +62,7 @@ int tetragon_init(const char *log_file_path) {
         fprintf(stderr, "ERROR: Failed to initialize inotify: %s\n", strerror(errno));
         return -1;
     }
+    tetragon_state.watch_fd = -1;
     
     memset(&tetragon_state.stats, 0, sizeof(struct tetragon_stats));
     tetragon_state.running = 0;
@@ -131,11 +151,12 @@ int tetragon_parse_event(struct json_object *json_event, struct security_event *
     
     memset(event, 0, sizeof(struct security_event));
     
-    // Get timestamp
+    // Timestamp
     struct json_object *time_obj;
     if (json_object_object_get_ex(json_event, "time", &time_obj)) {
-        // Parse ISO8601 timestamp - simplified version
-        event->timestamp = time(NULL) * 1000000000ULL; // Use current time as fallback
+        event->timestamp = (uint64_t)time(NULL) * 1000000000ULL;
+    } else {
+        event->timestamp = (uint64_t)time(NULL) * 1000000000ULL;
     }
     
     // Get process execution info
@@ -148,25 +169,29 @@ int tetragon_parse_event(struct json_object *json_event, struct security_event *
             struct json_object *tmp;
             
             if (json_object_object_get_ex(process, "pid", &tmp)) {
-                event->pid = json_object_get_int(tmp);
+                event->pid = (uint32_t)json_object_get_int(tmp);
+            }
+            if (json_object_object_get_ex(process, "uid", &tmp)) {
+                event->uid = (uint32_t)json_object_get_int(tmp);
             }
             if (json_object_object_get_ex(process, "binary", &tmp)) {
-                strncpy(event->binary_path, json_object_get_string(tmp), MAX_FILE_PATH - 1);
+                safe_copy_json_str(tmp, event->binary_path, MAX_FILE_PATH);
+                extract_process_name_from_path(event->binary_path, event->process_name, MAX_PROCESS_NAME);
             }
             if (json_object_object_get_ex(process, "arguments", &tmp)) {
-                const char *args = json_object_get_string(tmp);
-                strncpy(event->command, args, MAX_COMMAND_LINE - 1);
+                safe_copy_json_str(tmp, event->command, MAX_COMMAND_LINE);
             }
-            
-            // Get parent info
-            struct json_object *parent;
-            if (json_object_object_get_ex(process_exec, "parent", &parent)) {
-                if (json_object_object_get_ex(parent, "pid", &tmp)) {
-                    event->ppid = json_object_get_int(tmp);
-                }
-                if (json_object_object_get_ex(parent, "binary", &tmp)) {
-                    strncpy(event->parent_binary, json_object_get_string(tmp), MAX_FILE_PATH - 1);
-                }
+        }
+
+        // Get parent info
+        struct json_object *parent;
+        if (json_object_object_get_ex(process_exec, "parent", &parent)) {
+            struct json_object *tmp;
+            if (json_object_object_get_ex(parent, "pid", &tmp)) {
+                event->ppid = (uint32_t)json_object_get_int(tmp);
+            }
+            if (json_object_object_get_ex(parent, "binary", &tmp)) {
+                safe_copy_json_str(tmp, event->parent_binary, MAX_FILE_PATH);
             }
         }
     }
@@ -181,7 +206,7 @@ int tetragon_parse_event(struct json_object *json_event, struct security_event *
             const char *func = json_object_get_string(tmp);
             
             // Extract info based on function
-            if (strstr(func, "file")) {
+            if (func && strstr(func, "file")) {
                 struct json_object *args;
                 if (json_object_object_get_ex(process_kprobe, "args", &args) && 
                     json_object_is_type(args, json_type_array)) {
@@ -192,7 +217,7 @@ int tetragon_parse_event(struct json_object *json_event, struct security_event *
                         if (json_object_object_get_ex(arg, "file_arg", &file_arg)) {
                             struct json_object *path;
                             if (json_object_object_get_ex(file_arg, "path", &path)) {
-                                strncpy(event->file_path, json_object_get_string(path), MAX_FILE_PATH - 1);
+                                safe_copy_json_str(path, event->file_path, MAX_FILE_PATH);
                             }
                         }
                     }
@@ -201,31 +226,66 @@ int tetragon_parse_event(struct json_object *json_event, struct security_event *
         }
         
         if (json_object_object_get_ex(process_kprobe, "policy_name", &tmp)) {
-            strncpy(event->policy_name, json_object_get_string(tmp), MAX_POLICY_NAME - 1);
+            safe_copy_json_str(tmp, event->policy_name, MAX_POLICY_NAME);
         }
         
         if (json_object_object_get_ex(process_kprobe, "message", &tmp)) {
-            strncpy(event->message, json_object_get_string(tmp), MAX_MESSAGE - 1);
+            safe_copy_json_str(tmp, event->message, MAX_MESSAGE);
         }
         
         if (json_object_object_get_ex(process_kprobe, "action", &tmp)) {
-            strncpy(event->action, json_object_get_string(tmp), sizeof(event->action) - 1);
+            safe_copy_json_str(tmp, event->action, sizeof(event->action));
         }
         
         // Get process info
         struct json_object *process;
         if (json_object_object_get_ex(process_kprobe, "process", &process)) {
             if (json_object_object_get_ex(process, "pid", &tmp)) {
-                event->pid = json_object_get_int(tmp);
+                event->pid = (uint32_t)json_object_get_int(tmp);
+            }
+            if (json_object_object_get_ex(process, "uid", &tmp)) {
+                event->uid = (uint32_t)json_object_get_int(tmp);
             }
             if (json_object_object_get_ex(process, "binary", &tmp)) {
-                strncpy(event->binary_path, json_object_get_string(tmp), MAX_FILE_PATH - 1);
+                safe_copy_json_str(tmp, event->binary_path, MAX_FILE_PATH);
+                extract_process_name_from_path(event->binary_path, event->process_name, MAX_PROCESS_NAME);
             }
+            if (json_object_object_get_ex(process, "arguments", &tmp)) {
+                safe_copy_json_str(tmp, event->command, MAX_COMMAND_LINE);
+            }
+        }
+
+        // Get parent info
+        struct json_object *parent;
+        if (json_object_object_get_ex(process_kprobe, "parent", &parent)) {
+            if (json_object_object_get_ex(parent, "pid", &tmp)) {
+                event->ppid = (uint32_t)json_object_get_int(tmp);
+            }
+            if (json_object_object_get_ex(parent, "binary", &tmp)) {
+                safe_copy_json_str(tmp, event->parent_binary, MAX_FILE_PATH);
+            }
+        }
+
+        // Populate human-readable message if Tetragon event omitted it
+        if (event->message[0] == '\0') {
+            snprintf(event->message, sizeof(event->message), "%s (%s) on %s",
+                     event->policy_name[0] ? event->policy_name : "Policy event",
+                     event->action[0] ? event->action : "Post",
+                     event->process_name[0] ? event->process_name : "process");
         }
     }
     
     // Classify event
-    event->severity = tetragon_classify_severity(event->event_type, event->message);
+    if (strcmp(event->action, "Sigkill") == 0 ||
+        strcmp(event->action, "KPROBE_ACTION_SIGKILL") == 0) {
+        event->severity = SEVERITY_CRITICAL;
+    } else {
+        event->severity = tetragon_classify_severity(event->event_type, event->message);
+        if (strcmp(event->event_type, EVENT_TYPE_PROCESS_KPROBE) == 0 &&
+            event->severity < SEVERITY_WARNING) {
+            event->severity = SEVERITY_WARNING;
+        }
+    }
     event->alert_type = tetragon_classify_alert_type(event->message, event->binary_path);
     
     return 0;
@@ -234,6 +294,18 @@ int tetragon_parse_event(struct json_object *json_event, struct security_event *
 // Store event in database
 int tetragon_store_event(struct security_event *event) {
     if (!event) return -1;
+
+    char src_ip_str[INET_ADDRSTRLEN] = {0};
+    char dst_ip_str[INET_ADDRSTRLEN] = {0};
+    const char *src_ptr = NULL;
+    const char *dst_ptr = NULL;
+
+    if (event->src_ip != 0 && inet_ntop(AF_INET, &event->src_ip, src_ip_str, sizeof(src_ip_str))) {
+        src_ptr = src_ip_str;
+    }
+    if (event->dst_ip != 0 && inet_ntop(AF_INET, &event->dst_ip, dst_ip_str, sizeof(dst_ip_str))) {
+        dst_ptr = dst_ip_str;
+    }
     
     return db_insert_security_event(
         event->timestamp,
@@ -248,8 +320,8 @@ int tetragon_store_event(struct security_event *event) {
         event->parent_binary,
         event->action,
         event->policy_name,
-        event->src_ip ? inet_ntoa(*(struct in_addr*)&event->src_ip) : NULL,
-        event->dst_ip ? inet_ntoa(*(struct in_addr*)&event->dst_ip) : NULL,
+        src_ptr,
+        dst_ptr,
         event->dst_port,
         event->file_path[0] ? event->file_path : NULL,
         event->file_operation[0] ? event->file_operation : NULL,
@@ -263,35 +335,40 @@ int tetragon_generate_alert(struct security_event *event) {
         return 0; // Only alert on warnings and above
     }
     
-    // Create alert JSON - use smaller fields to avoid truncation
-    char alert_json[1024];
     const char *severity_str = event->severity == SEVERITY_CRITICAL ? "CRITICAL" : "WARNING";
-    
-    snprintf(alert_json, sizeof(alert_json),
-        "{"
-        "\"type\":\"security_alert\","
-        "\"severity\":\"%s\","
-        "\"pid\":%u,"
-        "\"action\":\"%s\""
-        "}",
-        severity_str,
-        event->pid,
-        event->action
-    );
-    
-    // Send via WebSocket
-    ws_broadcast_message(alert_json);
+    const char *msg_text = event->message[0]
+        ? event->message
+        : (event->binary_path[0] ? event->binary_path : "Tetragon security policy triggered");
+
+    struct json_object *alert_obj = json_object_new_object();
+    if (!alert_obj) return -1;
+
+    json_object_object_add(alert_obj, "type", json_object_new_string("security_alert"));
+    json_object_object_add(alert_obj, "severity", json_object_new_string(severity_str));
+    json_object_object_add(alert_obj, "pid", json_object_new_int64((int64_t)event->pid));
+    json_object_object_add(alert_obj, "process", json_object_new_string(event->process_name[0] ? event->process_name : "unknown"));
+    json_object_object_add(alert_obj, "action", json_object_new_string(event->action));
+    json_object_object_add(alert_obj, "policy", json_object_new_string(event->policy_name));
+    json_object_object_add(alert_obj, "message", json_object_new_string(msg_text));
+
+    const char *alert_json = json_object_to_json_string(alert_obj);
+    if (alert_json) {
+        ws_broadcast_message(alert_json);
+    }
+    json_object_put(alert_obj);
     
     // Update stats
     pthread_mutex_lock(&tetragon_state.stats_mutex);
     tetragon_state.stats.alerts_generated++;
-    if (strcmp(event->action, "Sigkill") == 0 || strcmp(event->action, "block") == 0) {
+    if (strcmp(event->action, "Sigkill") == 0 ||
+        strcmp(event->action, "KPROBE_ACTION_SIGKILL") == 0 ||
+        strcmp(event->action, "block") == 0) {
         tetragon_state.stats.events_blocked++;
     }
     pthread_mutex_unlock(&tetragon_state.stats_mutex);
     
-    printf("ALERT[%s]: PID: %u, Action: %s\n", 
-           severity_str, event->pid, event->action);
+    printf("ALERT[%s]: PID: %u, Action: %s, Msg: %s\n", 
+           severity_str, event->pid, event->action, msg_text);
     
     return 0;
 }
@@ -339,53 +416,92 @@ void *tetragon_event_monitor_thread(void *arg) {
     
     FILE *log_fp = NULL;
     char line[8192];
+    int waited_logged = 0;
     
     printf("INFO: Tetragon event monitor thread started\n");
-    
-    // Open log file
-    log_fp = fopen(tetragon_state.log_file_path, "r");
-    if (!log_fp) {
-        fprintf(stderr, "ERROR: Failed to open Tetragon log: %s\n", tetragon_state.log_file_path);
-        return NULL;
-    }
-    
-    // Seek to end (we only want new events)
-    fseek(log_fp, 0, SEEK_END);
-    
-    // Add inotify watch
-    tetragon_state.watch_fd = inotify_add_watch(tetragon_state.inotify_fd, 
-                                                 tetragon_state.log_file_path, 
-                                                 IN_MODIFY);
-    if (tetragon_state.watch_fd < 0) {
-        fprintf(stderr, "ERROR: Failed to add inotify watch: %s\n", strerror(errno));
-        fclose(log_fp);
-        return NULL;
-    }
-    
     tetragon_state.running = 1;
     
     while (tetragon_state.running) {
-        // Check for new data
+        // Wait for or reopen log file (supports delayed Tetragon startup and log rotation)
+        if (!log_fp) {
+            log_fp = fopen(tetragon_state.log_file_path, "r");
+            if (!log_fp) {
+                if (!waited_logged) {
+                    fprintf(stderr, "INFO: Waiting for Tetragon log file: %s\n", tetragon_state.log_file_path);
+                    waited_logged = 1;
+                }
+                sleep(2);
+                continue;
+            }
+            if (waited_logged) {
+                // Reopened or appeared after startup: read from beginning of newly created/rotated file
+                waited_logged = 0;
+            } else {
+                // Initial open on pre-existing log file: tail from end
+                fseek(log_fp, 0, SEEK_END);
+            }
+            if (tetragon_state.watch_fd >= 0) {
+                inotify_rm_watch(tetragon_state.inotify_fd, tetragon_state.watch_fd);
+            }
+            tetragon_state.watch_fd = inotify_add_watch(
+                tetragon_state.inotify_fd,
+                tetragon_state.log_file_path,
+                IN_MODIFY | IN_MOVE_SELF | IN_DELETE_SELF
+            );
+        }
+
+        // Check inotify events
+        int need_reopen = 0;
         char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
         ssize_t len = read(tetragon_state.inotify_fd, buf, sizeof(buf));
-        
         if (len > 0) {
-            // File was modified, read new lines
-            while (fgets(line, sizeof(line), log_fp)) {
-                // Remove newline
-                line[strcspn(line, "\n")] = 0;
+            ssize_t offset = 0;
+            while (offset < len) {
+                struct inotify_event *ev = (struct inotify_event *)(buf + offset);
+                if (ev->mask & (IN_MOVE_SELF | IN_DELETE_SELF)) {
+                    need_reopen = 1;
+                }
+                offset += (ssize_t)sizeof(struct inotify_event) + ev->len;
+            }
+        }
+
+        // Drain newly written lines
+        while (fgets(line, sizeof(line), log_fp)) {
+            line[strcspn(line, "\r\n")] = 0;
+            if (line[0] != '\0') {
                 tetragon_process_json_line(line);
             }
-            // Clear EOF so we can read again when more data arrives
-            clearerr(log_fp);
+        }
+        clearerr(log_fp);
+
+        // Also detect copytruncate rotation cleanly
+        struct stat st;
+        if (!need_reopen && stat(tetragon_state.log_file_path, &st) == 0) {
+            long pos = ftell(log_fp);
+            if (pos >= 0 && st.st_size < pos) {
+                fseek(log_fp, 0, SEEK_SET);
+            }
+        }
+
+        if (need_reopen) {
+            if (tetragon_state.watch_fd >= 0) {
+                inotify_rm_watch(tetragon_state.inotify_fd, tetragon_state.watch_fd);
+                tetragon_state.watch_fd = -1;
+            }
+            fclose(log_fp);
+            log_fp = NULL;
+            waited_logged = 1; // Read newly rotated file from byte 0
+            continue;
         }
         
-        // Sleep briefly to avoid busy loop
         usleep(100000); // 100ms
     }
     
     if (log_fp) fclose(log_fp);
-    inotify_rm_watch(tetragon_state.inotify_fd, tetragon_state.watch_fd);
+    if (tetragon_state.watch_fd >= 0) {
+        inotify_rm_watch(tetragon_state.inotify_fd, tetragon_state.watch_fd);
+        tetragon_state.watch_fd = -1;
+    }
     
     printf("INFO: Tetragon event monitor thread stopped\n");
     return NULL;

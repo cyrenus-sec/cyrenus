@@ -19,18 +19,17 @@ fi
 
 echo -e "\n${BLUE}=== Running Policy Tests ===${NC}"
 
-# Test 1: Anti-RCE (Block Shell Execution)
-# This mimics a web server spawning a shell (uid != 0 usually, but here just testing execve block)
-# The policy matches /bin/sh, /bin/bash, /bin/dash
-echo -n "Test 1: Blocking shell execution (/bin/dash)... "
-# Try to run dash and immediately exit. If killed, it won't run.
-if sudo -u nobody /bin/dash -c "exit 0" 2>/dev/null; then
-     # If it succeeded, it wasn't blocked (or policy logic allows standalone usage)
-     # The policy says: execve of /bin/sh, /bin/bash, /bin/dash -> SIGKILL.
-     # Wait, matchArgs index:0 Equal /bin/sh... depends on how it's called.
-     echo -e "${RED}Failed (Not Blocked)${NC}"
+# Test 1: Anti-RCE (Block Shell Execution from Web/App Runtimes)
+# Simulates a Python/web app RCE spawning /bin/dash -> should be killed by Sigkill
+echo -n "Test 1: Blocking shell execution spawned by app runtime... "
+if command -v python3 >/dev/null; then
+    if sudo -u nobody /usr/bin/python3 -c "import subprocess; subprocess.run(['/bin/dash', '-c', 'exit 0'], check=True)" 2>/dev/null; then
+        echo -e "${RED}Failed (Not Blocked)${NC}"
+    else
+        echo -e "${GREEN}Passed (Blocked/Killed)${NC}"
+    fi
 else
-    echo -e "${GREEN}Passed (Blocked/Killed)${NC}"
+    echo -e "${YELLOW}Skipped (python3 not installed)${NC}"
 fi
 
 # Test 2: Nmap execution (Policy #6)

@@ -209,23 +209,44 @@ static __always_inline void print_ip_and_pps(__u32 ip, __u64 pps)
     bpf_printk(".%d.%d, PPS: %llu", b, a, pps);
 }
 
-static __always_inline void update_attack_info(__u32 src_ip, __u8 protocol, __u32 packets, __u64 bytes) {
+#define ATK_ID_UDP_FLOOD   1
+#define ATK_ID_SYN_FLOOD   2
+#define ATK_ID_DNS_AMP     3
+#define ATK_ID_ICMP_FLOOD  4
+#define ATK_ID_FRAG_ATTACK 5
+
+static __always_inline void set_attack_type_name(char *dst, int attack_id) {
+    switch (attack_id) {
+        case ATK_ID_UDP_FLOOD:
+            __builtin_memcpy(dst, "UDP Flood", 10);
+            break;
+        case ATK_ID_SYN_FLOOD:
+            __builtin_memcpy(dst, "SYN Flood", 10);
+            break;
+        case ATK_ID_DNS_AMP:
+            __builtin_memcpy(dst, "DNS Amplification", 18);
+            break;
+        case ATK_ID_ICMP_FLOOD:
+            __builtin_memcpy(dst, "ICMP Flood", 11);
+            break;
+        case ATK_ID_FRAG_ATTACK:
+            __builtin_memcpy(dst, "Fragment Attack", 16);
+            break;
+        default:
+            __builtin_memcpy(dst, "Unknown Attack", 15);
+            break;
+    }
+}
+
+static __always_inline void update_attack_info(__u32 src_ip, __u8 protocol, __u32 packets, __u64 bytes, int attack_id) {
     __u32 index = 0;
     __u32 count = 0;
     
-    // Lookup current attack count
+    // Lookup current attack count and atomically allocate ring slot
     __u32 *count_ptr = bpf_map_lookup_elem(&attack_count, &index);
     if (count_ptr) {
-        count = *count_ptr;
-    } else {
-        // If lookup fails, initialize count to 0
-        count = 0;
-    }
-
-    if (count >= MAX_ATTACKS) {
-        // Array is full - evict oldest entry by wrapping to last slot
-        count = MAX_ATTACKS - 1;
-        bpf_printk("WARN: Attack array full, evicting oldest entry");
+        count = __sync_fetch_and_add(count_ptr, 1);
+        count = count % MAX_ATTACKS;
     }
 
     struct attack_info new_attack = {0}; // Zero out everything first
@@ -235,15 +256,10 @@ static __always_inline void update_attack_info(__u32 src_ip, __u8 protocol, __u3
     new_attack.protocol = protocol;
     new_attack.packets = packets;
     new_attack.bytes = bytes;
-    // attack_type is zeroed out by {0}, which is fine for now. 
-    // We could add logic to populate it based on type.
+    set_attack_type_name(new_attack.attack_type, attack_id);
 
     // Update the attack info array
     (void)bpf_map_update_elem(&attack_info_array, &count, &new_attack, BPF_ANY);
-   
-    // Increment and update the attack count
-    count++;
-     bpf_map_update_elem(&attack_count, &index, &count, BPF_ANY);
 }
 
 static __always_inline void update_packet_length_stats(struct traffic_info_t *info, __u32 packet_length, __u8 direction) {
@@ -367,21 +383,21 @@ static __always_inline int check_udp_flood(struct iphdr *iph, struct udphdr *udp
                           bpf_ntohl(src_ip), pps);
             }
            
-            update_attack_info(src_ip, IPPROTO_UDP, 1, pkt_size);
+            update_attack_info(src_ip, IPPROTO_UDP, info->packet_count, info->byte_count, ATK_ID_UDP_FLOOD);
             print_ip_and_pps(src_ip ,pps );
             return XDP_DROP;
         }
     }
 
-    info->last_update = now;
-
     if (dst_port == 53 && pkt_size > 512) {
         bpf_printk("Large DNS query detected from IP 0x%x", bpf_ntohl(src_ip));
+        update_attack_info(src_ip, IPPROTO_UDP, 1, pkt_size, ATK_ID_DNS_AMP);
         return XDP_DROP;
     }
 
     if ((dst_port == 123 || src_port == 123) && pkt_size > 1024) {
         bpf_printk("Large NTP packet detected from IP 0x%x", bpf_ntohl(src_ip));
+        update_attack_info(src_ip, IPPROTO_UDP, 1, pkt_size, ATK_ID_UDP_FLOOD);
         return XDP_DROP;
     }
 
@@ -437,11 +453,13 @@ static __always_inline int check_dns_amplification(struct iphdr *iph, struct udp
             } else {
                 bpf_printk("DNS rate limit exceeded for IP 0x%x", bpf_ntohl(src_ip));
             }
+            update_attack_info(src_ip, IPPROTO_UDP, info->packet_count, info->total_size, ATK_ID_DNS_AMP);
             return XDP_DROP;
         }
 
         if (is_response && packet_size > MAX_DNS_RESPONSE_SIZE) {
             bpf_printk("Large DNS response detected from IP 0x%x", bpf_ntohl(src_ip));
+            update_attack_info(src_ip, IPPROTO_UDP, 1, packet_size, ATK_ID_DNS_AMP);
             return XDP_DROP;
         }
     } else {
@@ -480,18 +498,23 @@ static __always_inline int handle_fragment(struct iphdr *iph) {
 
             if (info->frag_count > cfg.max_frags) {
                 bpf_printk("Too many fragments from IP 0x%x", bpf_ntohl(src_ip));
+                update_attack_info(src_ip, iph->protocol, info->frag_count, bpf_ntohs(iph->tot_len), ATK_ID_FRAG_ATTACK);
                 return XDP_DROP;
             }
         }
 
         if (frag_offset == 1) {
             bpf_printk("Tiny fragment detected from IP 0x%x", bpf_ntohl(src_ip));
+            update_attack_info(src_ip, iph->protocol, 1, bpf_ntohs(iph->tot_len), ATK_ID_FRAG_ATTACK);
             return XDP_DROP;
         }
 
-        __u16 ip_payload_len = bpf_ntohs(iph->tot_len) - (iph->ihl * 4);
+        __u16 tot_len = bpf_ntohs(iph->tot_len);
+        __u16 ihl_bytes = iph->ihl * 4;
+        __u16 ip_payload_len = (tot_len >= ihl_bytes) ? (tot_len - ihl_bytes) : 0;
         if ((frag_flags & IP_MF) && ip_payload_len < 16) {
             bpf_printk("Suspicious small fragment from IP 0x%x", bpf_ntohl(src_ip));
+            update_attack_info(src_ip, iph->protocol, 1, tot_len, ATK_ID_FRAG_ATTACK);
             return XDP_DROP;
         }
     }
@@ -500,11 +523,10 @@ static __always_inline int handle_fragment(struct iphdr *iph) {
 }
 
  static __always_inline int apply_rule(__u32 ip, __u16 port, __u8 proto) {
-    struct rule_key_t key = {
-        .ip = ip,
-        .port = bpf_htons(port),
-        .proto = proto
-    };
+    struct rule_key_t key = {0};
+    key.ip = ip;
+    key.port = bpf_htons(port);
+    key.proto = proto;
 
     // First check: exact match (IP + specific port + proto)
     struct rule_t *rule = bpf_map_lookup_elem(&rules, &key);
@@ -579,6 +601,7 @@ static __always_inline int check_syn_flood(struct iphdr *iph, struct tcphdr *tcp
                     info->syn_count > info->synack_count * 10) {
                     bpf_printk("SYN flood detected from IP 0x%x (SYN:%u SYNACK:%u)", 
                               bpf_ntohl(src_ip), info->syn_count, info->synack_count);
+                    update_attack_info(src_ip, IPPROTO_TCP, info->syn_count, bpf_ntohs(iph->tot_len), ATK_ID_SYN_FLOOD);
                     return XDP_DROP;
                 }
             }
@@ -641,6 +664,7 @@ static __always_inline int early_filter(struct iphdr *iph, __u8 proto, __u16 src
             bucket->last_update = now;
             return XDP_PASS;
         } else {
+            update_attack_info(iph->saddr, IPPROTO_ICMP, 1, bpf_ntohs(iph->tot_len), ATK_ID_ICMP_FLOOD);
             return XDP_DROP;
         }
     }
@@ -723,6 +747,13 @@ int xdp_prog(struct xdp_md *ctx) {
     if ((void*)(ip + 1) > data_end)
         return XDP_PASS;
 
+    if (ip->ihl < 5)
+        return XDP_DROP;
+
+    __u32 ip_header_length = ip->ihl * 4;
+    if ((void *)ip + ip_header_length > data_end)
+        return XDP_PASS;
+
     int frag_action = handle_fragment(ip);
     if (frag_action != XDP_PASS)
         return frag_action;
@@ -737,7 +768,6 @@ int xdp_prog(struct xdp_md *ctx) {
     __u16 src_port = 0, dst_port = 0;
     __u8 proto = ip->protocol;
 
-    __u32 ip_header_length = ip->ihl * 4;
     __u32 l4_header_length = 0;
     __u32 payload_length = 0;
     __u8 tcp_flags = 0;
@@ -793,7 +823,12 @@ int xdp_prog(struct xdp_md *ctx) {
             return XDP_PASS;
     }
 
-    payload_length = bpf_ntohs(ip->tot_len) - ip_header_length - l4_header_length;
+    __u32 tot_len = bpf_ntohs(ip->tot_len);
+    if (tot_len >= ip_header_length + l4_header_length) {
+        payload_length = tot_len - ip_header_length - l4_header_length;
+    } else {
+        payload_length = 0;
+    }
 
     int action = apply_rule(src_ip, src_port, proto);
     if (action != XDP_PASS)

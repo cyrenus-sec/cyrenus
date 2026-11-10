@@ -200,11 +200,7 @@ int runtime_config_parse_args(int argc, char **argv, struct runtime_config *rc) 
     // If there's a positional argument, treat it as config file path
     if (optind < argc) {
         strncpy(rc->config_file_path, argv[optind], MAX_PATH_LEN - 1);
-    }
-    
-    
-    if (optind < argc) {
-        strncpy(rc->config_file_path, argv[optind], MAX_PATH_LEN - 1);
+        rc->config_file_path[MAX_PATH_LEN - 1] = '\0';
     }
     
     return 0;

@@ -26,7 +26,7 @@ struct connection_context {
     size_t size;
 };
 
-#define MAX_PAYLOAD_SIZE 1024 * 1024 // 1MB limit for POST body
+// MAX_PAYLOAD_SIZE is defined in http_server.h
 
 // --- Helper Functions ---
 
@@ -267,6 +267,7 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
     // Security/Tetragon routes
     if (strcmp(url, "/api/v1/security/events") == 0 && strcmp(method, "GET") == 0) {
         struct MHD_Response *response = api_security_events_list(connection, method, url);
+        if (!response) return send_response_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Error");
         enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
         MHD_destroy_response(response);
         return ret;
@@ -274,6 +275,7 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
     
     if (strcmp(url, "/api/v1/security/stats") == 0 && strcmp(method, "GET") == 0) {
         struct MHD_Response *response = api_security_stats(connection, method, url);
+        if (!response) return send_response_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Error");
         enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
         MHD_destroy_response(response);
         return ret;
@@ -281,6 +283,7 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
     
     if (strcmp(url, "/api/v1/security/policies") == 0 && strcmp(method, "GET") == 0) {
         struct MHD_Response *response = api_security_policies_list(connection, method, url);
+        if (!response) return send_response_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Error");
         enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
         MHD_destroy_response(response);
         return ret;
@@ -288,14 +291,20 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
     
     if (strncmp(url, "/api/v1/security/policy/", 24) == 0) {
         const char *policy_name = url + 24;
-        
+        const char *deploy_suffix = strstr(policy_name, "/deploy");
+
         // Check for /deploy suffix
-        if (strstr(policy_name, "/deploy")) {
+        if (deploy_suffix && strcmp(deploy_suffix, "/deploy") == 0) {
             char name[256];
-            strncpy(name, policy_name, sizeof(name) - 1);
-            name[strstr(name, "/deploy") - name] = '\0';
+            size_t name_len = (size_t)(deploy_suffix - policy_name);
+            if (name_len == 0 || name_len >= sizeof(name)) {
+                return send_response_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid policy name");
+            }
+            memcpy(name, policy_name, name_len);
+            name[name_len] = '\0';
             if (strcmp(method, "POST") == 0) {
                 struct MHD_Response *response = api_security_policy_deploy(connection, method, name);
+                if (!response) return send_response_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Error");
                 enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
                 MHD_destroy_response(response);
                 return ret;
@@ -319,6 +328,7 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
     
     if (strcmp(url, "/api/v1/security/logs") == 0 && strcmp(method, "GET") == 0) {
         struct MHD_Response *response = api_security_logs(connection, method, url);
+        if (!response) return send_response_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Error");
         enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
         MHD_destroy_response(response);
         return ret;
@@ -385,7 +395,7 @@ struct MHD_Daemon *start_http_server(
     app_fds.config_map_fd = config_map_fd;
 
     struct MHD_Daemon *daemon = MHD_start_daemon(
-        MHD_USE_SELECT_INTERNALLY | MHD_USE_DEBUG,
+        MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
         app_config->http_port,
         NULL, NULL,
         &handle_request, NULL,

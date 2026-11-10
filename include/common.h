@@ -7,6 +7,7 @@
 #include <linux/types.h>
 #include <linux/if_ether.h>
 #include <net/if.h>
+#include <time.h>
 #endif
 
 #define MAX_RULES 1024
@@ -20,12 +21,14 @@
 #define DIRECTION_INCOMING 0
 #define DIRECTION_OUTGOING 1
 
+#if !defined(__KERNEL__) && !defined(__bpf__)
 struct session {
     char user_id[37];  // UUID string (36 chars + null terminator)
     char session_id[37];  // UUID string
     char token[65];  // SHA256 hash is 64 characters + null terminator
     time_t expiry;
 };
+#endif
 
 
 struct rule_t {
@@ -91,6 +94,7 @@ struct rule_key_t {
     __u32 ip;
     __u16 port;
     __u8 proto;
+    __u8 pad;
 };
 
 struct flow_key_t {
@@ -101,13 +105,6 @@ struct flow_key_t {
     __u8 proto;
     __u8 pad[3]; // Padding to ensure 4-byte alignment and no holes
 };
-// Action values for rules
-#define ACTION_PASS 0
-#define ACTION_DROP 1
-
-// Direction values
-#define DIRECTION_INCOMING 0
-#define DIRECTION_OUTGOING 1
 
 #ifdef __KERNEL__
 // XDP action values for kernel space

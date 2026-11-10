@@ -1,10 +1,11 @@
 # Stage 1: Builder
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 # Install build dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    gcc-multilib \
     clang \
     llvm \
     libelf-dev \
@@ -16,58 +17,60 @@ RUN apt-get update && apt-get install -y \
     libwebsockets-dev \
     libssl-dev \
     libsqlcipher-dev \
-    libsqlite3-dev \
     libmaxminddb-dev \
-    libhpdf-dev \
     uuid-dev \
+    zlib1g-dev \
     pkg-config \
     git \
     curl \
     xxd \
-    ca-certificates
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js (Latest LTS)
+# Install Node.js (20 LTS)
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy source code
 COPY . .
 
-# Build Web UI
-RUN cd web && \
-    npm install && \
-    npm run build && \
-    ./build.sh || true
+# Ensure scripts use Unix LF line endings and executable permissions
+RUN find . -name "*.sh" -exec sed -i 's/\r$//' {} + && \
+    chmod +x web/build.sh
 
-# Build Cyrenus
+# Build frontend assets, eBPF program, and Cyrenus binary
 RUN make clean && make all
 
 # Stage 2: Runtime
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    libelf1 \
-    libbpf0 \
-    libmicrohttpd12 \
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install runtime dependencies (Ubuntu 24.04 Noble t64/SONAME packages)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libelf1t64 \
+    libbpf1 \
+    libmicrohttpd12t64 \
     libconfig9 \
     libjson-c5 \
-    libcurl4 \
-    libwebsockets16 \
-    libssl3 \
-    libsqlcipher0 \
+    libcurl4t64 \
+    libwebsockets19t64 \
+    libssl3t64 \
+    libsqlcipher1 \
     libmaxminddb0 \
-    libhpdf-2.3.0 \
+    libuuid1 \
     uuid-runtime \
+    zlib1g \
     iproute2 \
     iptables \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories
-RUN mkdir -p /etc/cyrenus /var/lib/cyrenus /etc/tetragon/policies
+RUN mkdir -p /etc/cyrenus /var/lib/cyrenus /etc/tetragon/policies /var/log/tetragon
 
 # Copy binaries and config
 COPY --from=builder /app/build/cyrenus /usr/local/bin/cyrenus
@@ -77,8 +80,8 @@ COPY --from=builder /app/config/cyrenus.conf /etc/cyrenus/cyrenus.conf
 # Copy policies
 COPY config/tetragon/policies /etc/tetragon/policies
 
-# Expose ports
-EXPOSE 8181
+# Expose ports (HTTP API/UI + WebSocket)
+EXPOSE 8181 8182
 
 # Default command
 CMD ["/usr/local/bin/cyrenus", "/etc/cyrenus/cyrenus.conf"]

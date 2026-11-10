@@ -7,32 +7,36 @@ spec:
   - name: "disable-kprobe-multi"
     value: "1"
   kprobes:
-  # 1. Detect web servers spawning shells (common RCE vector)
+  # 1. Prevent web servers & app runtimes from spawning shells (common RCE vector)
+  # Scoped via matchBinaries so normal system/admin shells are unaffected
   - call: "sys_execve"
     syscall: true
     args:
     - index: 0
       type: "string"
     selectors:
-    - matchArgs:
+    - matchBinaries:
+      - operator: "In"
+        values:
+        - "/usr/sbin/nginx"
+        - "/usr/sbin/apache2"
+        - "/usr/bin/httpd"
+        - "/usr/sbin/httpd"
+        - "/usr/bin/php-fpm"
+        - "/usr/sbin/php-fpm"
+        - "/usr/bin/node"
+        - "/usr/bin/python3"
+        - "/usr/bin/java"
+      matchArgs:
       - index: 0
-        operator: "Equal"
+        operator: "In"
         values:
         - "/bin/sh"
-      matchActions:
-      - action: Sigkill
-    - matchArgs:
-      - index: 0
-        operator: "Equal"
-        values:
         - "/bin/bash"
-      matchActions:
-      - action: Sigkill
-    - matchArgs:
-      - index: 0
-        operator: "Equal"
-        values:
         - "/bin/dash"
+        - "/usr/bin/sh"
+        - "/usr/bin/bash"
+        - "/usr/bin/dash"
       matchActions:
       - action: Sigkill
       
@@ -148,6 +152,8 @@ spec:
         values:
         - "/bin/bash"
         - "/bin/sh"
+        - "/usr/bin/bash"
+        - "/usr/bin/sh"
         - "/usr/bin/nc"
         - "/usr/bin/netcat"
       matchActions:

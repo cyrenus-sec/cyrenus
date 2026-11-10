@@ -28,8 +28,9 @@ enum MHD_Result api_rules_list(struct MHD_Connection *connection,
     struct rule_key_t key = {0}, next_key = {0};
     struct rule_t rule;
     
-    if (fds->rules_fd >= 0) {
-        while (bpf_map_get_next_key(fds->rules_fd, &key, &next_key) == 0) {
+    if (fds && fds->rules_fd >= 0) {
+        void *cur_key = NULL;
+        while (bpf_map_get_next_key(fds->rules_fd, cur_key, &next_key) == 0) {
             if (bpf_map_lookup_elem(fds->rules_fd, &next_key, &rule) == 0) {
                 char ip_str[INET_ADDRSTRLEN];
                 inet_ntop(AF_INET, &next_key.ip, ip_str, sizeof(ip_str));
@@ -44,6 +45,7 @@ enum MHD_Result api_rules_list(struct MHD_Connection *connection,
                 json_object_array_add(json_rules, json_rule);
             }
             key = next_key;
+            cur_key = &key;
         }
     }
 
@@ -63,6 +65,15 @@ enum MHD_Result api_rules_create(struct MHD_Connection *connection,
                                  const char *upload_data, size_t size) {
     struct map_fds *fds = ctx->fds;
     struct MHD_Response *response;
+
+    if (!upload_data || size == 0) {
+        const char *err = "{\"error\":\"Missing request body\"}";
+        response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(response, "Content-Type", "application/json");
+        MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
+        MHD_destroy_response(response);
+        return MHD_YES;
+    }
     
     json_object *json_rule = json_tokener_parse(upload_data);
     if (!json_rule) {
@@ -81,26 +92,46 @@ enum MHD_Result api_rules_create(struct MHD_Connection *connection,
     json_object *j_ip, *j_port, *j_proto, *j_action;
     
     // IP
+    const char *ip_str = NULL;
     if (json_object_object_get_ex(json_rule, "ip", &j_ip)) {
-        if (inet_pton(AF_INET, json_object_get_string(j_ip), &key.ip) != 1) {
-             // Handle error
-        }
+        ip_str = json_object_get_string(j_ip);
+    }
+    if (!ip_str || inet_pton(AF_INET, ip_str, &key.ip) != 1) {
+        const char *err = "{\"error\":\"Invalid or missing IP address\"}";
+        response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(response, "Content-Type", "application/json");
+        MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
+        MHD_destroy_response(response);
+        json_object_put(json_rule);
+        return MHD_YES;
     }
     
     // Port
     if (json_object_object_get_ex(json_rule, "port", &j_port)) {
         int port = json_object_get_int(j_port);
-        key.port = htons(port);
-        rule.port_start = htons(port);
-        rule.port_end = htons(port);
+        if (port < 0 || port > 65535) {
+            const char *err = "{\"error\":\"Invalid port\"}";
+            response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+            MHD_add_response_header(response, "Content-Type", "application/json");
+            MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
+            MHD_destroy_response(response);
+            json_object_put(json_rule);
+            return MHD_YES;
+        }
+        key.port = htons((uint16_t)port);
+        rule.port_start = htons((uint16_t)port);
+        rule.port_end = htons((uint16_t)port);
     }
     
     // Proto
+    key.proto = IPPROTO_TCP;
     if (json_object_object_get_ex(json_rule, "proto", &j_proto)) {
         const char *proto = json_object_get_string(j_proto);
-        if (strcasecmp(proto, "tcp") == 0) key.proto = IPPROTO_TCP;
-        else if (strcasecmp(proto, "udp") == 0) key.proto = IPPROTO_UDP;
-        else if (strcasecmp(proto, "icmp") == 0) key.proto = IPPROTO_ICMP;
+        if (proto) {
+            if (strcasecmp(proto, "tcp") == 0) key.proto = IPPROTO_TCP;
+            else if (strcasecmp(proto, "udp") == 0) key.proto = IPPROTO_UDP;
+            else if (strcasecmp(proto, "icmp") == 0) key.proto = IPPROTO_ICMP;
+        }
     }
     rule.proto = key.proto;
     
@@ -108,10 +139,10 @@ enum MHD_Result api_rules_create(struct MHD_Connection *connection,
     rule.action = 1; // Default drop
     if (json_object_object_get_ex(json_rule, "action", &j_action)) {
         const char *action = json_object_get_string(j_action);
-        if (strcasecmp(action, "pass") == 0) rule.action = 2;
+        if (action && strcasecmp(action, "pass") == 0) rule.action = 2;
     }
 
-    if (bpf_map_update_elem(fds->rules_fd, &key, &rule, BPF_ANY) != 0) {
+    if (!fds || fds->rules_fd < 0 || bpf_map_update_elem(fds->rules_fd, &key, &rule, BPF_ANY) != 0) {
         const char *err = "{\"error\":\"Failed to update BPF map\"}";
         response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
         MHD_add_response_header(response, "Content-Type", "application/json");
@@ -136,20 +167,38 @@ enum MHD_Result api_rules_delete(struct MHD_Connection *connection,
     // id_str expected format: IP_PORT_PROTO e.g. "192.168.1.1_80_6"
     struct map_fds *fds = ctx->fds;
     
-    char ip_str[INET_ADDRSTRLEN];
-    int port, proto;
+    char ip_str[INET_ADDRSTRLEN] = {0};
+    int port = 0, proto = 0;
     
-    if (sscanf(id_str, "%15[^_]_%d_%d", ip_str, &port, &proto) != 3) {
-         // Error
+    if (!id_str || sscanf(id_str, "%15[^_]_%d_%d", ip_str, &port, &proto) != 3 ||
+        port < 0 || port > 65535 || proto < 0 || proto > 255) {
+        const char *err = "{\"error\":\"Invalid rule ID format\"}";
+        struct MHD_Response *rs = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(rs, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, rs);
+        MHD_destroy_response(rs);
+        return ret;
     }
     
     struct rule_key_t key = {0};
-    inet_pton(AF_INET, ip_str, &key.ip);
-    key.port = htons(port);
-    key.proto = proto;
+    if (inet_pton(AF_INET, ip_str, &key.ip) != 1) {
+        const char *err = "{\"error\":\"Invalid IP address in rule ID\"}";
+        struct MHD_Response *rs = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(rs, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, rs);
+        MHD_destroy_response(rs);
+        return ret;
+    }
+    key.port = htons((uint16_t)port);
+    key.proto = (uint8_t)proto;
     
-    if (bpf_map_delete_elem(fds->rules_fd, &key) != 0) {
-        // Error
+    if (!fds || fds->rules_fd < 0 || bpf_map_delete_elem(fds->rules_fd, &key) != 0) {
+        const char *err = "{\"error\":\"Rule not found\"}";
+        struct MHD_Response *rs = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(rs, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, rs);
+        MHD_destroy_response(rs);
+        return ret;
     }
     
     const char *succ = "{\"status\":\"Rule deleted\"}";

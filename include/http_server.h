@@ -8,9 +8,7 @@
     macros
 */
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
-// Function to start the HTTP server
 // Include necessary headers
-#include <microhttpd.h>
 #include "../include/runtime_config.h"
 #include "../include/database.h"
 

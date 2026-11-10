@@ -211,7 +211,7 @@ struct api_key_record {
     int id;
     char name[64];
     char key_hash[128]; // SHA-256 or similar
-    char key_prefix[8]; // First 4-7 chars for identification
+    char key_prefix[16]; // First 10 chars (e.g. cyr_k_XXXX) for identification
     char permissions[64];
     time_t last_used_at;
     time_t expires_at;

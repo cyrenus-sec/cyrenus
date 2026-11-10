@@ -5,25 +5,38 @@
 #include <uuid/uuid.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
+#include <openssl/rand.h>
 #include <json-c/json.h>
 #include <microhttpd.h>
 #include "../../include/api_handlers.h"
 #include "../../include/database.h"
 #include "../../include/common.h"
 
-// Helper to generate a secure random key
-// Format: cyr_k_<random_32_chars>
-static void generate_api_key(char *key_buffer, size_t buffer_size) {
-    const char *charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    size_t charset_len = strlen(charset);
-    
+// Helper to generate a cryptographically secure random key
+// Format: cyr_k_<random_chars>
+static int generate_api_key(char *key_buffer, size_t buffer_size) {
+    static const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const size_t charset_len = sizeof(charset) - 1; // 62
+    const unsigned char max_valid = (unsigned char)(256 - (256 % charset_len));
+
+    if (!key_buffer || buffer_size < 16) return -1;
+
     snprintf(key_buffer, buffer_size, "cyr_k_");
-    size_t prefix_len = 6;
-    
-    for (size_t i = prefix_len; i < buffer_size - 1; i++) {
-        key_buffer[i] = charset[rand() % charset_len];
+    size_t pos = 6;
+
+    while (pos < buffer_size - 1) {
+        unsigned char rnd[32];
+        if (RAND_bytes(rnd, sizeof(rnd)) != 1) {
+            return -1;
+        }
+        for (size_t j = 0; j < sizeof(rnd) && pos < buffer_size - 1; j++) {
+            if (rnd[j] < max_valid) {
+                key_buffer[pos++] = charset[rnd[j] % charset_len];
+            }
+        }
     }
     key_buffer[buffer_size - 1] = '\0';
+    return 0;
 }
 
 void hash_api_key(const char *key, char *hash_out) {
@@ -67,8 +80,11 @@ enum MHD_Result api_keys_list(struct MHD_Connection *connection, struct api_cont
     
     if (database_list_api_keys(ctx->db, &keys, &count) != 0) {
         const char *err = "{\"error\":\"Database error\"}";
-         struct MHD_Response *response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
-        return MHD_queue_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, response);
+        struct MHD_Response *response = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(response, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, response);
+        MHD_destroy_response(response);
+        return ret;
     }
     
     struct json_object *j_array = json_object_new_array();
@@ -98,9 +114,23 @@ enum MHD_Result api_keys_list(struct MHD_Connection *connection, struct api_cont
 
 // POST /api/v1/keys
 enum MHD_Result api_keys_create(struct MHD_Connection *connection, struct api_context *ctx, const char *upload_data, size_t size) {
+    if (!upload_data || size == 0) {
+        const char *err = "{\"error\":\"Missing request body\"}";
+        struct MHD_Response *resp = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, resp);
+        MHD_destroy_response(resp);
+        return ret;
+    }
+
     struct json_object *root = json_tokener_parse(upload_data);
     if (!root) {
-        return MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, MHD_create_response_from_buffer(0, "", MHD_RESPMEM_PERSISTENT));
+        const char *err = "{\"error\":\"Invalid JSON\"}";
+        struct MHD_Response *resp = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, resp);
+        MHD_destroy_response(resp);
+        return ret;
     }
     
     struct json_object *j_name, *j_perms, *j_expires;
@@ -108,16 +138,30 @@ enum MHD_Result api_keys_create(struct MHD_Connection *connection, struct api_co
     const char *perms = "read,write";
     time_t expires_at = 0; // Never
     
-    if (json_object_object_get_ex(root, "name", &j_name)) name = json_object_get_string(j_name);
-    if (json_object_object_get_ex(root, "permissions", &j_perms)) perms = json_object_get_string(j_perms);
+    if (json_object_object_get_ex(root, "name", &j_name)) {
+        const char *s = json_object_get_string(j_name);
+        if (s && s[0]) name = s;
+    }
+    if (json_object_object_get_ex(root, "permissions", &j_perms)) {
+        const char *s = json_object_get_string(j_perms);
+        if (s && s[0]) perms = s;
+    }
     if (json_object_object_get_ex(root, "expires_in_days", &j_expires)) {
         int days = json_object_get_int(j_expires);
-        if (days > 0) expires_at = time(NULL) + (days * 86400);
+        if (days > 0) expires_at = time(NULL) + ((time_t)days * 86400);
     }
     
     // Generate Key
     char raw_key[64];
-    generate_api_key(raw_key, sizeof(raw_key));
+    if (generate_api_key(raw_key, sizeof(raw_key)) != 0) {
+        json_object_put(root);
+        const char *err = "{\"error\":\"Key generation failed\"}";
+        struct MHD_Response *resp = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, resp);
+        MHD_destroy_response(resp);
+        return ret;
+    }
     
     char key_hash[65];
     hash_api_key(raw_key, key_hash);
@@ -126,16 +170,20 @@ enum MHD_Result api_keys_create(struct MHD_Connection *connection, struct api_co
     strncpy(key_record.name, name, sizeof(key_record.name)-1);
     strncpy(key_record.key_hash, key_hash, sizeof(key_record.key_hash)-1);
     
-    // Prefix: cyr_k_XXXX (first 10 chars)
-    strncpy(key_record.key_prefix, raw_key, 10); 
-    key_record.key_prefix[10] = '\0';
+    // Prefix: cyr_k_XXXX (first 10 chars, safely fits in key_prefix[16])
+    snprintf(key_record.key_prefix, sizeof(key_record.key_prefix), "%.10s", raw_key);
     
     strncpy(key_record.permissions, perms, sizeof(key_record.permissions)-1);
     key_record.expires_at = expires_at;
     
     if (database_create_api_key(ctx->db, &key_record) != 0) {
         json_object_put(root);
-        return MHD_queue_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, MHD_create_response_from_buffer(0, "", MHD_RESPMEM_PERSISTENT));
+        const char *err = "{\"error\":\"Database error\"}";
+        struct MHD_Response *resp = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, resp);
+        MHD_destroy_response(resp);
+        return ret;
     }
     
     // Return the RAW key (only time user sees it)
@@ -156,12 +204,23 @@ enum MHD_Result api_keys_create(struct MHD_Connection *connection, struct api_co
 
 // DELETE /api/v1/keys
 enum MHD_Result api_keys_delete(struct MHD_Connection *connection, struct api_context *ctx, const char *upload_data, size_t size) {
-    // Expecting JSON {id: 123} 
-    // Or prefer query param? POST/DELETE with body is fine.
+    if (!upload_data || size == 0) {
+        const char *err = "{\"error\":\"Missing request body\"}";
+        struct MHD_Response *resp = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, resp);
+        MHD_destroy_response(resp);
+        return ret;
+    }
     
     struct json_object *root = json_tokener_parse(upload_data);
     if (!root) {
-         return MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, MHD_create_response_from_buffer(0, "", MHD_RESPMEM_PERSISTENT));
+        const char *err = "{\"error\":\"Invalid JSON\"}";
+        struct MHD_Response *resp = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, resp);
+        MHD_destroy_response(resp);
+        return ret;
     }
     
     struct json_object *j_id;

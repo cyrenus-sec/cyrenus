@@ -39,10 +39,23 @@ enum MHD_Result api_iplists_get(struct MHD_Connection *connection,
 enum MHD_Result api_iplists_add(struct MHD_Connection *connection, 
                                 struct api_context *ctx,
                                 const char *upload_data, size_t size) {
+    if (!upload_data || size == 0) {
+        const char *err = "{\"error\":\"Missing request body\"}";
+        struct MHD_Response *resp = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, resp);
+        MHD_destroy_response(resp);
+        return ret;
+    }
+
     json_object *root = json_tokener_parse(upload_data);
     if (!root) {
-        // Error handling
-        return MHD_NO; 
+        const char *err = "{\"error\":\"Invalid JSON\"}";
+        struct MHD_Response *resp = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, resp);
+        MHD_destroy_response(resp);
+        return ret;
     }
     
     // Parse IP, list_type, etc. and insert into DB

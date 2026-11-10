@@ -21,11 +21,9 @@ enum MHD_Result api_traffic_stats(struct MHD_Connection *connection,
     int count = 0;
     
     // Iterate through traffic map
-    if (fds->traffic_fd >= 0) {
-        // Start iteration by using an all-zero key if needed, or better, NULL
-        // For bpf_map_get_next_key, starting with a zero key is common but NULL is standard for 'first'
-        // Actually, some libbpf wrappers use key = 0.
-        while (bpf_map_get_next_key(fds->traffic_fd, &key, &next_key) == 0) {
+    if (fds && fds->traffic_fd >= 0) {
+        void *cur_key = NULL;
+        while (bpf_map_get_next_key(fds->traffic_fd, cur_key, &next_key) == 0) {
             if (bpf_map_lookup_elem(fds->traffic_fd, &next_key, &info) == 0) {
                 char src_ip[INET_ADDRSTRLEN];
                 char dst_ip[INET_ADDRSTRLEN];
@@ -46,6 +44,7 @@ enum MHD_Result api_traffic_stats(struct MHD_Connection *connection,
                 if (++count >= 100) break; // Limit to 100 entries for UI performance
             }
             key = next_key;
+            cur_key = &key;
         }
     }
 

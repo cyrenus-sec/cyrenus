@@ -2,16 +2,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifndef SQLITE_HAS_CODEC
+#define SQLITE_HAS_CODEC
+#endif
 #include <sqlite3.h>
 #include <openssl/sha.h>
 #include <sys/stat.h>
 #include <errno.h>
 #include "../include/database.h"
-
-// Define SQL calls if not using SQLCipher specific headers
-#ifndef SQLITE_HAS_CODEC
-#define SQLITE_HAS_CODEC
-#endif
 
 // Private helper prototypes
 static int run_sql(sqlite3 *db, const char *sql);
@@ -45,13 +43,15 @@ int database_init(struct database *db, const char *db_path, const char *master_k
     char *dir_end = strrchr(db->db_path, '/');
     if (dir_end) {
         char dir_path[512];
-        int len = dir_end - db->db_path;
-        strncpy(dir_path, db->db_path, len);
-        dir_path[len] = '\0';
-        
-        struct stat st = {0};
-        if (stat(dir_path, &st) == -1) {
-            mkdir(dir_path, 0700);
+        size_t len = (size_t)(dir_end - db->db_path);
+        if (len > 0 && len < sizeof(dir_path)) {
+            memcpy(dir_path, db->db_path, len);
+            dir_path[len] = '\0';
+
+            struct stat st = {0};
+            if (stat(dir_path, &st) == -1) {
+                mkdir(dir_path, 0700);
+            }
         }
     }
 
@@ -69,12 +69,10 @@ int database_open(struct database *db) {
 
     // Apply encryption if key exists
     if (db->is_encrypted && strlen(db->encryption_key) > 0) {
-        // SQLCipher specific pragma to set the key
-        char pragma_sql[128];
-        snprintf(pragma_sql, sizeof(pragma_sql), "PRAGMA key = '%s';", db->encryption_key);
-        if (sqlite3_exec(db->db, pragma_sql, NULL, NULL, NULL) != SQLITE_OK) {
+        if (sqlite3_key(db->db, db->encryption_key, (int)strlen(db->encryption_key)) != SQLITE_OK) {
              log_error("Failed to set encryption key", sqlite3_errmsg(db->db));
              sqlite3_close(db->db);
+             db->db = NULL;
              return -1;
         }
     }
@@ -298,6 +296,11 @@ int database_insert_attack(struct database *db, const struct attack_record *atta
 }
 
 int database_list_attacks(struct database *db, struct attack_record **attacks, int *count, int limit, int offset) {
+    if (!db || !db->is_open || !attacks || !count) return -1;
+    if (limit <= 0) limit = 50;
+    if (limit > 10000) limit = 10000;
+    if (offset < 0) offset = 0;
+
     const char *sql = "SELECT id, timestamp, src_ip, attack_type, severity, packets, bytes, duration, status, created_at "
                       "FROM attacks ORDER BY timestamp DESC LIMIT ? OFFSET ?;";
     sqlite3_stmt *stmt;
@@ -306,7 +309,7 @@ int database_list_attacks(struct database *db, struct attack_record **attacks, i
     sqlite3_bind_int(stmt, 1, limit);
     sqlite3_bind_int(stmt, 2, offset);
 
-    struct attack_record *list = malloc(sizeof(struct attack_record) * limit);
+    struct attack_record *list = calloc((size_t)limit, sizeof(struct attack_record));
     if (!list) {
         sqlite3_finalize(stmt);
         return -1;
@@ -316,13 +319,16 @@ int database_list_attacks(struct database *db, struct attack_record **attacks, i
     while (sqlite3_step(stmt) == SQLITE_ROW && idx < limit) {
         list[idx].id = sqlite3_column_int64(stmt, 0);
         list[idx].timestamp = sqlite3_column_int64(stmt, 1);
-        strncpy(list[idx].src_ip, (const char*)sqlite3_column_text(stmt, 2), sizeof(list[idx].src_ip)-1);
-        strncpy(list[idx].attack_type, (const char*)sqlite3_column_text(stmt, 3), sizeof(list[idx].attack_type)-1);
+        const char *sip = (const char*)sqlite3_column_text(stmt, 2);
+        strncpy(list[idx].src_ip, sip ? sip : "", sizeof(list[idx].src_ip)-1);
+        const char *atype = (const char*)sqlite3_column_text(stmt, 3);
+        strncpy(list[idx].attack_type, atype ? atype : "", sizeof(list[idx].attack_type)-1);
         list[idx].severity = sqlite3_column_int(stmt, 4);
         list[idx].packets = sqlite3_column_int(stmt, 5);
         list[idx].bytes = sqlite3_column_int64(stmt, 6);
         list[idx].duration = sqlite3_column_int(stmt, 7);
-        strncpy(list[idx].status, (const char*)sqlite3_column_text(stmt, 8), sizeof(list[idx].status)-1);
+        const char *status = (const char*)sqlite3_column_text(stmt, 8);
+        strncpy(list[idx].status, status ? status : "", sizeof(list[idx].status)-1);
         list[idx].created_at = sqlite3_column_int64(stmt, 9);
         idx++;
     }
@@ -415,6 +421,9 @@ int database_insert_session(struct database *db, const struct session_record *se
 }
 
 int database_get_session(struct database *db, const char *token, struct session_record *session) {
+    if (!db || !db->is_open || !token || !session) return -1;
+    memset(session, 0, sizeof(*session));
+
     const char *sql = "SELECT id, user_id, session_id, token, expires_at, created_at FROM sessions WHERE token = ? AND expires_at > ?;";
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(db->db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
@@ -424,9 +433,12 @@ int database_get_session(struct database *db, const char *token, struct session_
 
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         session->id = sqlite3_column_int(stmt, 0);
-        strncpy(session->user_id, (const char*)sqlite3_column_text(stmt, 1), sizeof(session->user_id)-1);
-        strncpy(session->session_id, (const char*)sqlite3_column_text(stmt, 2), sizeof(session->session_id)-1);
-        strncpy(session->token, (const char*)sqlite3_column_text(stmt, 3), sizeof(session->token)-1);
+        const char *uid = (const char*)sqlite3_column_text(stmt, 1);
+        strncpy(session->user_id, uid ? uid : "", sizeof(session->user_id)-1);
+        const char *sid = (const char*)sqlite3_column_text(stmt, 2);
+        strncpy(session->session_id, sid ? sid : "", sizeof(session->session_id)-1);
+        const char *tok = (const char*)sqlite3_column_text(stmt, 3);
+        strncpy(session->token, tok ? tok : "", sizeof(session->token)-1);
         session->expires_at = sqlite3_column_int64(stmt, 4);
         session->created_at = sqlite3_column_int64(stmt, 5);
         sqlite3_finalize(stmt);
@@ -435,6 +447,30 @@ int database_get_session(struct database *db, const char *token, struct session_
 
     sqlite3_finalize(stmt);
     return -1; // Not found
+}
+
+int database_delete_session(struct database *db, const char *token) {
+    if (!db || !db->is_open || !token) return -1;
+    const char *sql = "DELETE FROM sessions WHERE token = ?;";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db->db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+
+    sqlite3_bind_text(stmt, 1, token, -1, SQLITE_STATIC);
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+int database_delete_expired_sessions(struct database *db) {
+    if (!db || !db->is_open) return -1;
+    const char *sql = "DELETE FROM sessions WHERE expires_at <= ?;";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db->db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+
+    sqlite3_bind_int64(stmt, 1, time(NULL));
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
 // --- Helper implementations ---
@@ -695,11 +731,15 @@ int database_list_security_events(struct database *db, struct security_event_rec
     if (to > 0) {
         sqlite3_bind_int64(stmt, bind_idx++, to);
     }
+    if (limit <= 0) limit = 100;
+    if (limit > 10000) limit = 10000;
+    if (offset < 0) offset = 0;
+
     sqlite3_bind_int(stmt, bind_idx++, limit);
     sqlite3_bind_int(stmt, bind_idx++, offset);
     
-    // Allocate result array
-    struct security_event_record *list = malloc(sizeof(struct security_event_record) * limit);
+    // Allocate zero-initialized result array
+    struct security_event_record *list = calloc((size_t)limit, sizeof(struct security_event_record));
     if (!list) {
         sqlite3_finalize(stmt);
         return -1;
@@ -709,7 +749,8 @@ int database_list_security_events(struct database *db, struct security_event_rec
     while (sqlite3_step(stmt) == SQLITE_ROW && idx < limit) {
         list[idx].id = sqlite3_column_int64(stmt, 0);
         list[idx].timestamp = sqlite3_column_int64(stmt, 1);
-        strncpy(list[idx].event_type, (const char*)sqlite3_column_text(stmt, 2), sizeof(list[idx].event_type)-1);
+        const char *etype = (const char*)sqlite3_column_text(stmt, 2);
+        strncpy(list[idx].event_type, etype ? etype : "", sizeof(list[idx].event_type)-1);
         list[idx].severity = sqlite3_column_int(stmt, 3);
         
         const char *pname = (const char*)sqlite3_column_text(stmt, 4);
@@ -856,12 +897,15 @@ int database_list_attack_correlations(struct database *db,
         return -1;
     }
     
+    if (limit <= 0) limit = 100;
+    if (limit > 10000) limit = 10000;
+
     sqlite3_bind_double(stmt, 1, min_confidence);
     sqlite3_bind_int64(stmt, 2, from);
     sqlite3_bind_int64(stmt, 3, to);
     sqlite3_bind_int(stmt, 4, limit);
     
-    struct attack_correlation_record *list = malloc(sizeof(struct attack_correlation_record) * limit);
+    struct attack_correlation_record *list = calloc((size_t)limit, sizeof(struct attack_correlation_record));
     if (!list) {
         sqlite3_finalize(stmt);
         return -1;
@@ -871,17 +915,17 @@ int database_list_attack_correlations(struct database *db,
     while (sqlite3_step(stmt) == SQLITE_ROW && idx < limit) {
         list[idx].id = sqlite3_column_int64(stmt, 0);
         list[idx].timestamp = sqlite3_column_int64(stmt, 1);
-        strncpy(list[idx].attack_type, (const char*)sqlite3_column_text(stmt, 2),
-                sizeof(list[idx].attack_type)-1);
+        const char *atype = (const char*)sqlite3_column_text(stmt, 2);
+        strncpy(list[idx].attack_type, atype ? atype : "", sizeof(list[idx].attack_type)-1);
         list[idx].confidence_score = sqlite3_column_double(stmt, 3);
         list[idx].network_event_id = sqlite3_column_int64(stmt, 4);
         list[idx].security_event_id = sqlite3_column_int64(stmt, 5);
-        strncpy(list[idx].description, (const char*)sqlite3_column_text(stmt, 6),
-                sizeof(list[idx].description)-1);
-        strncpy(list[idx].source_ip, (const char*)sqlite3_column_text(stmt, 7),
-                sizeof(list[idx].source_ip)-1);
-        strncpy(list[idx].details, (const char*)sqlite3_column_text(stmt, 8),
-                sizeof(list[idx].details)-1);
+        const char *desc = (const char*)sqlite3_column_text(stmt, 6);
+        strncpy(list[idx].description, desc ? desc : "", sizeof(list[idx].description)-1);
+        const char *sip = (const char*)sqlite3_column_text(stmt, 7);
+        strncpy(list[idx].source_ip, sip ? sip : "", sizeof(list[idx].source_ip)-1);
+        const char *details = (const char*)sqlite3_column_text(stmt, 8);
+        strncpy(list[idx].details, details ? details : "", sizeof(list[idx].details)-1);
         list[idx].created_at = sqlite3_column_int64(stmt, 9);
         idx++;
     }

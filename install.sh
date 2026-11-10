@@ -86,17 +86,19 @@ install_dependencies() {
                 libssl-dev \
                 libsqlcipher-dev \
                 libmaxminddb-dev \
-                libharu-dev \
                 uuid-dev \
+                zlib1g-dev \
                 pkg-config \
                 git \
                 curl \
+                xxd \
                 nodejs \
                 npm
             ;;
         fedora|rhel|centos)
             dnf install -y \
                 gcc \
+                make \
                 clang \
                 llvm \
                 elfutils-libelf-devel \
@@ -109,9 +111,10 @@ install_dependencies() {
                 openssl-devel \
                 sqlcipher-devel \
                 libmaxminddb-devel \
-                libharu-devel \
                 libuuid-devel \
+                zlib-devel \
                 pkgconfig \
+                vim-common \
                 git \
                 curl \
                 nodejs \
@@ -132,9 +135,10 @@ install_dependencies() {
                 openssl \
                 sqlcipher \
                 libmaxminddb \
-                libharu \
                 util-linux \
+                zlib \
                 pkgconf \
+                xxd \
                 git \
                 nodejs \
                 npm
@@ -142,11 +146,11 @@ install_dependencies() {
         *)
             echo -e "${YELLOW}Warning: Automatic dependency installation not supported for $OS${NC}"
             echo "Please install the following dependencies manually:"
-            echo "  - clang, llvm"
-            echo "  - libelf-dev, libbpf-dev"
+            echo "  - gcc, make, clang, llvm, xxd"
+            echo "  - libelf-dev, libbpf-dev, zlib1g-dev"
             echo "  - libmicrohttpd-dev, libconfig-dev, libjson-c-dev"
-            echo "  - libcurl-dev, libwebsockets-dev"
-            echo "  - libsqlcipher-dev, libmaxminddb-dev, libharu-dev"
+            echo "  - libcurl4-openssl-dev, libwebsockets-dev, libssl-dev"
+            echo "  - libsqlcipher-dev, libmaxminddb-dev, uuid-dev"
             echo "  - nodejs, npm"
             read -p "Press Enter to continue or Ctrl+C to abort..."
             ;;
@@ -162,18 +166,24 @@ verify_dependencies() {
     local missing_deps=()
     
     # Check for required commands
-    for cmd in clang llvm-config pkg-config node npm; do
+    for cmd in gcc make clang llvm-config pkg-config node npm xxd; do
         if ! command_exists "$cmd"; then
             missing_deps+=("$cmd")
         fi
     done
     
     # Check for required libraries
-    for lib in bpf elf microhttpd config json-c curl websockets ssl crypto sqlcipher maxminddb uuid; do
-        if ! pkg-config --exists "lib$lib" 2>/dev/null && ! ldconfig -p | grep -q "lib$lib"; then
+    for lib in bpf elf microhttpd config json-c curl websockets ssl crypto sqlcipher maxminddb uuid zlib; do
+        if ! pkg-config --exists "$lib" 2>/dev/null && \
+           ! pkg-config --exists "lib$lib" 2>/dev/null && \
+           ! ldconfig -p | grep -q "lib$lib"; then
             missing_deps+=("lib$lib")
         fi
     done
+
+    if [ ! -f /usr/include/sqlcipher/sqlite3.h ] && ! pkg-config --exists sqlcipher 2>/dev/null; then
+        missing_deps+=("libsqlcipher-dev")
+    fi
     
     if [ ${#missing_deps[@]} -eq 0 ]; then
         echo -e "${GREEN}✓ All dependencies verified${NC}"
@@ -311,17 +321,9 @@ EOF
 build_application() {
     echo -e "\n${BLUE}Building Cyrenus...${NC}\n"
     
-    # Build embedded web UI
-    if [ -d "web" ]; then
-        echo "Building web UI..."
-        cd web
-        npm install
-        npm run build
-        ./build.sh 2>/dev/null || true
-        cd ..
-    fi
+    chmod +x web/build.sh 2>/dev/null || true
     
-    # Build main application
+    # Build main application (Makefile 'all' builds frontend -> eBPF -> C)
     make clean
     make all
     
@@ -432,12 +434,25 @@ manage_tetragon() {
         
         if [[ "$INSTALL_TETRAGON" =~ ^[Yy] ]]; then
             echo "Installing Tetragon..."
-            # Basic standalone installation for amd64
-             curl -L https://github.com/cilium/tetragon/releases/latest/download/tetragon-amd64.tar.gz | tar -xz -C /usr/local/bin
-             # Install systemd service if not present (simplified, usually part of package)
-             # For now, we assume user might need to configure it manually if not using a package manager
-             echo -e "${GREEN}✓ Tetragon binary installed to /usr/local/bin${NC}"
-             echo -e "${YELLOW}Note: You may need to configure the systemd service manually or run 'tetragon' directly.${NC}"
+            TETRAGON_INSTALLER="$(dirname "$0")/scripts/install_tetragon.sh"
+            if [ -f "$TETRAGON_INSTALLER" ]; then
+                bash "$TETRAGON_INSTALLER"
+            else
+                TETRAGON_VER="v1.1.2"
+                ARCH_RAW=$(uname -m)
+                case "$ARCH_RAW" in
+                    x86_64) TETRA_ARCH="amd64" ;;
+                    aarch64|arm64) TETRA_ARCH="arm64" ;;
+                    *) echo -e "${RED}Unsupported arch: $ARCH_RAW${NC}"; return 1 ;;
+                esac
+                TMP_TG=$(mktemp -d)
+                curl -fL "https://github.com/cilium/tetragon/releases/download/${TETRAGON_VER}/tetragon-${TETRAGON_VER}-${TETRA_ARCH}.tar.gz" | tar -xz -C "$TMP_TG"
+                find "$TMP_TG" -name "tetragon" -type f -exec install -m 755 {} /usr/local/bin/tetragon \;
+                find "$TMP_TG" -name "tetra" -type f -exec install -m 755 {} /usr/local/bin/tetra \;
+                rm -rf "$TMP_TG"
+                mkdir -p /etc/tetragon/policies /var/log/tetragon
+                echo -e "${GREEN}✓ Tetragon binaries installed to /usr/local/bin${NC}"
+            fi
         fi
     fi
 }

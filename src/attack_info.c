@@ -40,31 +40,17 @@ int get_attack_info(struct attack_info **attacks, int map_fd_attack_info_array, 
         return 0;
     }
 
-    uint32_t attack_count = 0;
-    /*
-    
-    uint32_t count_key = 0;
-      if (bpf_map_lookup_elem(map_fd_attack_count, &count_key, &attack_count) != 0) {
-        fprintf(stderr, "Failed to lookup attack count\n");
-        free(*attacks);
-        *attacks = NULL;
+    if (map_fd_attack_info_array < 0) {
         return 0;
     }
 
-    fprintf(stderr, "Retrieved attack count: %u\n", attack_count);
-
-    if (attack_count > MAX_ATTACKS) {
-        attack_count = MAX_ATTACKS;
-    }
-    */
-  
-
-      uint32_t key = {0}, next_key = {0};
-   while (bpf_map_get_next_key(map_fd_attack_info_array, &key, &next_key) == 0) 
-    {
+    uint32_t attack_count = 0;
+    uint32_t key = 0, next_key = 0;
+    void *cur_key = NULL;
+    while (bpf_map_get_next_key(map_fd_attack_info_array, cur_key, &next_key) == 0) {
         struct attack_info ebpf_attack;
-         if (bpf_map_lookup_elem(map_fd_attack_info_array, &next_key, &ebpf_attack) == 0) {
-             if (ebpf_attack.packets > 0 && ebpf_attack.timestamp > 0) {
+        if (bpf_map_lookup_elem(map_fd_attack_info_array, &next_key, &ebpf_attack) == 0) {
+            if (ebpf_attack.packets > 0 && ebpf_attack.timestamp > 0) {
                 struct attack_info *attack = &(*attacks)[attack_count];
                 memcpy(attack, &ebpf_attack, sizeof(struct attack_info));
 
@@ -72,14 +58,12 @@ int get_attack_info(struct attack_info **attacks, int map_fd_attack_info_array, 
                 inet_ntop(AF_INET, &(attack->src_ip), ip_str, INET_ADDRSTRLEN);
                 fprintf(stderr, "Retrieved attack from IP: %s\n", ip_str);
                 attack_count++;
-                
+
                 if (attack_count >= MAX_ATTACKS) break;
             }
-            }
-
-           
-            key = next_key;
-        /* code */
+        }
+        key = next_key;
+        cur_key = &key;
     }
 
    /* for (uint32_t i = 0; i < attack_count; i++) {
@@ -241,10 +225,10 @@ void print_attack_info(struct attack_info *attack) {
     inet_ntop(AF_INET, &(attack->src_ip), src_ip_str, INET_ADDRSTRLEN);
     
     printf("Attack Type: %s\n", attack->attack_type);
-    printf("Timestamp: %llu\n", attack->timestamp);
+    printf("Timestamp: %llu\n", (unsigned long long)attack->timestamp);
     printf("Source IP: %s\n", src_ip_str);
     printf("Protocol: %s\n", get_proto_name(attack->protocol));
     printf("Packets: %u\n", attack->packets);
-    printf("Bytes: %llu\n", attack->bytes);
+    printf("Bytes: %llu\n", (unsigned long long)attack->bytes);
     printf("------------------------------\n");
 }

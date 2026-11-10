@@ -27,6 +27,7 @@ fi
 
 # Build
 echo "Bundling assets..."
+mkdir -p dist
 cp src/index.html dist/
 cp src/login.html dist/
 npm run build

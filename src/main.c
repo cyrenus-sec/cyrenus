@@ -11,7 +11,6 @@
 #include "../include/database.h"
 #include "../include/bpf_loader.h"
 #include "../include/http_server.h"
-#include "../include/http_server.h"
 #include "../include/geoip_helpers.h"
 #include "../include/websocket_server.h"
 #include <pthread.h>
@@ -41,8 +40,10 @@ uint32_t get_interface_ip(const char *interface_name) {
         return 0;
     }
 
+    memset(&ifr, 0, sizeof(ifr));
     ifr.ifr_addr.sa_family = AF_INET;
-    strncpy(ifr.ifr_name, interface_name, IFNAMSIZ-1);
+    strncpy(ifr.ifr_name, interface_name, IFNAMSIZ - 1);
+    ifr.ifr_name[IFNAMSIZ - 1] = '\0';
 
     if (ioctl(fd, SIOCGIFADDR, &ifr) == -1) {
         perror("ioctl error");
@@ -71,7 +72,12 @@ void *monitor_thread(void *arg) {
     struct monitor_ctx *ctx = (struct monitor_ctx *)arg;
     uint32_t key = 0;
     int num_cpus = libbpf_num_possible_cpus();
-    struct global_stats_t *values = malloc(sizeof(struct global_stats_t) * num_cpus);
+    if (num_cpus <= 0) {
+        fprintf(stderr, "Failed to determine possible CPU count: %d\n", num_cpus);
+        free(ctx);
+        return NULL;
+    }
+    struct global_stats_t *values = malloc(sizeof(struct global_stats_t) * (size_t)num_cpus);
     
     if (!values) {
         fprintf(stderr, "Failed to allocate memory for monitor values\n");
@@ -83,8 +89,6 @@ void *monitor_thread(void *arg) {
     uint64_t prev_bytes = 0;
     
     while (running) {
-        if (!values) break;
-        
         uint64_t total_packets = 0;
         uint64_t total_bytes = 0;
         
@@ -97,8 +101,8 @@ void *monitor_thread(void *arg) {
             }
         }
         
-        uint32_t pps = (prev_packets > 0) ? (uint32_t)(total_packets - prev_packets) : 0;
-        uint64_t bps = (prev_bytes > 0) ? (total_bytes - prev_bytes) * 8 : 0;
+        uint32_t pps = (prev_packets > 0 && total_packets >= prev_packets) ? (uint32_t)(total_packets - prev_packets) : 0;
+        uint64_t bps = (prev_bytes > 0 && total_bytes >= prev_bytes) ? (total_bytes - prev_bytes) * 8 : 0;
         
         prev_packets = total_packets;
         prev_bytes = total_bytes;
@@ -175,7 +179,7 @@ int main(int argc, char **argv) {
     }
 
     // Initialize GeoIP if configured
-    if (config.geoip_db_path && strlen(config.geoip_db_path) > 0 && access(config.geoip_db_path, F_OK) == 0) {
+    if (!config.no_geoip && config.geoip_db_path[0] != '\0' && access(config.geoip_db_path, F_OK) == 0) {
         if (geoip_init(config.geoip_db_path) != 0) {
              // Silently ignore if DB fails to open but exists (e.g. invalid format)
         } else {
@@ -186,16 +190,23 @@ int main(int argc, char **argv) {
     // 3. Network Setup
     uint32_t host_ip = get_interface_ip(config.interface);
     if (host_ip == 0) {
-        fprintf(stderr, "Failed to get IP address for interface %s\n", config.interface);
-        database_close(&db);
-        return EXIT_FAILURE;
+        if (config.dry_run) {
+            fprintf(stderr, "Warning: Failed to get IP for interface %s, using 127.0.0.1 in dry-run mode\n", config.interface);
+            host_ip = htonl(INADDR_LOOPBACK);
+        } else {
+            fprintf(stderr, "Failed to get IP address for interface %s\n", config.interface);
+            database_close(&db);
+            return EXIT_FAILURE;
+        }
     }
     printf("Detected host IP: %s\n", inet_ntoa((struct in_addr){host_ip}));
 
     // 4. Load eBPF Program
     // Variables to hold map file descriptors
-    int map_fd_rules, map_fd_traffic, map_fd_host_ip, map_fd_udp_flood, map_fd_dns_track, 
-        map_fd_syn_flood, map_fd_attack_info_array, map_fd_attack_count, map_fd_geoip, map_fd_blocked_countries, map_fd_global_stats, map_fd_config;
+    int map_fd_rules = -1, map_fd_traffic = -1, map_fd_host_ip = -1, map_fd_udp_flood = -1,
+        map_fd_dns_track = -1, map_fd_syn_flood = -1, map_fd_attack_info_array = -1,
+        map_fd_attack_count = -1, map_fd_geoip = -1, map_fd_blocked_countries = -1,
+        map_fd_global_stats = -1, map_fd_config = -1;
 
     if (!config.dry_run) {
         if (load_bpf_program("/usr/local/lib/cyrenus_xdp_prog.o", config.interface, host_ip,
@@ -209,12 +220,10 @@ int main(int argc, char **argv) {
         }
     } else {
         printf("Dry run: BPF program loading skipped\n");
-        // Mock FDs for dry run
-        map_fd_traffic = -1;
     }
 
     // Populate GeoIP BPF map (if configured)
-    if (!config.dry_run && config.geoip_db_path && strlen(config.geoip_db_path) > 0) {
+    if (!config.dry_run && !config.no_geoip && config.geoip_db_path[0] != '\0') {
         geoip_populate_bpf_map(map_fd_geoip);
     }
 
@@ -296,24 +305,24 @@ int main(int argc, char **argv) {
     }
 
     // 9. Initialize and Start Tetragon Event Monitor
-    printf("Initializing Tetragon event monitor...\\n");
+    printf("Initializing Tetragon event monitor...\n");
     const char *tetragon_log_path = "/var/log/tetragon/tetragon.log";
     
     if (tetragon_init(tetragon_log_path) == 0) {
-        printf("Tetragon monitor initialized for: %s\\n", tetragon_log_path);
+        printf("Tetragon monitor initialized for: %s\n", tetragon_log_path);
         
         // Set global database pointer for security API
         g_db = &db;
         
         if (tetragon_start_monitor() == 0) {
-            printf("Tetragon event monitor started successfully\\n");
+            printf("Tetragon event monitor started successfully\n");
         } else {
-            fprintf(stderr, "Warning: Failed to start Tetragon monitor thread\\n");
+            fprintf(stderr, "Warning: Failed to start Tetragon monitor thread\n");
         }
     } else {
-        fprintf(stderr, "Warning: Failed to initialize Tetragon monitor\\n");
-        fprintf(stderr, "Security event monitoring will not be available.\\n");
-        fprintf(stderr, "Make sure Tetragon is installed and running.\\n");
+        fprintf(stderr, "Warning: Failed to initialize Tetragon monitor\n");
+        fprintf(stderr, "Security event monitoring will not be available.\n");
+        fprintf(stderr, "Make sure Tetragon is installed and running.\n");
     }
 
     // Set up signal handlers to catch termination signals (SIGINT, SIGTERM)

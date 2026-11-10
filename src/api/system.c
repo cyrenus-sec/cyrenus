@@ -27,7 +27,8 @@ enum MHD_Result api_system_get_settings(struct MHD_Connection *connection,
     if (ctx->config) {
         json_object_object_add(j_settings, "interface", json_object_new_string(ctx->config->interface));
         json_object_object_add(j_settings, "log_level", json_object_new_int(ctx->config->log_level));
-        json_object_object_add(j_settings, "geoip_enabled", json_object_new_boolean(ctx->config->geoip_db_path != NULL));
+        json_object_object_add(j_settings, "geoip_enabled",
+            json_object_new_boolean(!ctx->config->no_geoip && ctx->config->geoip_db_path[0] != '\0'));
         
         // Thresholds
         json_object_object_add(j_settings, "syn_flood_rate", json_object_new_int(ctx->config->syn_flood_rate));
@@ -53,11 +54,25 @@ enum MHD_Result api_system_update_settings(struct MHD_Connection *connection,
                                            struct api_context *ctx,
                                            const char *upload_data, size_t size) {
     
+    if (!upload_data || size == 0) {
+        const char *err = "{\"error\":\"Missing request body\"}";
+        struct MHD_Response *resp = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Access-Control-Allow-Origin", "*");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, resp);
+        MHD_destroy_response(resp);
+        return ret;
+    }
+
     struct json_object *root = json_tokener_parse(upload_data);
     if (!root) {
         const char *err = "{\"error\":\"Invalid JSON\"}";
         struct MHD_Response *resp = MHD_create_response_from_buffer(strlen(err), (void*)err, MHD_RESPMEM_MUST_COPY);
-        return MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, resp);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        MHD_add_response_header(resp, "Access-Control-Allow-Origin", "*");
+        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, resp);
+        MHD_destroy_response(resp);
+        return ret;
     }
 
     struct json_object *j_syn, *j_udp, *j_icmp, *j_dns, *j_frags;
