@@ -1,3 +1,4 @@
+#define _DEFAULT_SOURCE
 #include "api_handlers.h"
 #include "../include/database.h"
 #include "../include/tetragon_events.h"
@@ -6,6 +7,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
+#include <errno.h>
 #include <json-c/json.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -16,22 +18,135 @@
 // External global database
 extern struct database *g_db;
 
-#define DEPLOYED_POLICY_DIR "/etc/tetragon/policies"
-#define TETRAGON_CONFIG_PATH "/etc/tetragon/tetragon.yaml"
-#define TETRAGON_LOG_PATH "/var/log/tetragon/tetragon.log"
+#define DEFAULT_DEPLOYED_POLICY_DIR "/etc/tetragon/policies"
+#define DEFAULT_TETRAGON_CONFIG_PATH "/etc/tetragon/tetragon.yaml"
+#define DEFAULT_TETRAGON_LOG_PATH "/var/log/tetragon/tetragon.log"
 #define MAX_POLICY_FILE_BYTES (4 * 1024 * 1024)
 
-// Resolve policy template directory: CYRENUS_POLICY_DIR -> ./config/tetragon/policies -> /etc/tetragon/policies
+static const char *get_deployed_policy_dir(void) {
+    const char *env_dir = getenv("CYRENUS_TETRAGON_DIR");
+    if (env_dir && env_dir[0] != '\0') return env_dir;
+    return DEFAULT_DEPLOYED_POLICY_DIR;
+}
+
+// Resolve policy template directory: CYRENUS_POLICY_DIR -> ./config/tetragon/policies -> deployed dir
 static const char *get_policy_dir(void) {
-    struct stat st;
     const char *env_dir = getenv("CYRENUS_POLICY_DIR");
-    if (env_dir && env_dir[0] != '\0' && stat(env_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
+    if (env_dir && env_dir[0] != '\0') {
         return env_dir;
     }
+    struct stat st;
     if (stat("./config/tetragon/policies", &st) == 0 && S_ISDIR(st.st_mode)) {
         return "./config/tetragon/policies";
     }
-    return DEPLOYED_POLICY_DIR;
+    return get_deployed_policy_dir();
+}
+
+static const char *get_tetragon_config_path(void) {
+    const char *env_cfg = getenv("CYRENUS_TETRAGON_CONFIG");
+    if (env_cfg && env_cfg[0] != '\0') return env_cfg;
+    return DEFAULT_TETRAGON_CONFIG_PATH;
+}
+
+static const char *get_tetragon_log_path(void) {
+    const char *env_log = getenv("CYRENUS_TETRAGON_LOG");
+    if (env_log && env_log[0] != '\0') return env_log;
+    return DEFAULT_TETRAGON_LOG_PATH;
+}
+
+static int mkdir_p(const char *dir, mode_t mode) {
+    if (!dir || dir[0] == '\0') return -1;
+    char tmp[1024];
+    snprintf(tmp, sizeof(tmp), "%s", dir);
+    size_t len = strlen(tmp);
+    while (len > 1 && tmp[len - 1] == '/') {
+        tmp[--len] = '\0';
+    }
+    for (char *p = tmp + 1; *p != '\0'; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            if (mkdir(tmp, mode) != 0 && errno != EEXIST) return -1;
+            *p = '/';
+        }
+    }
+    if (mkdir(tmp, mode) != 0) {
+        if (errno != EEXIST) return -1;
+        struct stat st;
+        if (stat(tmp, &st) != 0 || !S_ISDIR(st.st_mode)) return -1;
+    }
+    return 0;
+}
+
+static int ensure_parent_dir(const char *file_path) {
+    if (!file_path) return -1;
+    const char *slash = strrchr(file_path, '/');
+    if (!slash || slash == file_path) return 0;
+    char dir[1024];
+    size_t len = (size_t)(slash - file_path);
+    if (len >= sizeof(dir)) return -1;
+    memcpy(dir, file_path, len);
+    dir[len] = '\0';
+    return mkdir_p(dir, 0755);
+}
+
+static int write_file_atomic_lf(const char *path, const char *content) {
+    if (!path || !content) return -1;
+    if (ensure_parent_dir(path) != 0) return -1;
+
+    char dir[1024];
+    const char *slash = strrchr(path, '/');
+    if (!slash) {
+        snprintf(dir, sizeof(dir), ".");
+    } else if (slash == path) {
+        snprintf(dir, sizeof(dir), "/");
+    } else {
+        size_t len = (size_t)(slash - path);
+        if (len >= sizeof(dir)) return -1;
+        memcpy(dir, path, len);
+        dir[len] = '\0';
+    }
+
+    char tmp_path[1100];
+    if (strcmp(dir, "/") == 0) {
+        snprintf(tmp_path, sizeof(tmp_path), "/.tmp.XXXXXX");
+    } else {
+        snprintf(tmp_path, sizeof(tmp_path), "%.1024s/.tmp.XXXXXX", dir);
+    }
+
+    int tmp_fd = mkstemp(tmp_path);
+    if (tmp_fd < 0) return -1;
+
+    FILE *fp = fdopen(tmp_fd, "wb");
+    if (!fp) {
+        close(tmp_fd);
+        unlink(tmp_path);
+        return -1;
+    }
+
+    int err = 0;
+    for (const char *p = content; *p != '\0'; p++) {
+        if (*p == '\r') {
+            if (*(p + 1) == '\n') continue; // Normalize CRLF -> LF
+            if (fputc('\n', fp) == EOF) { err = -1; break; }
+        } else {
+            if (fputc((unsigned char)*p, fp) == EOF) { err = -1; break; }
+        }
+    }
+    if (!err && fflush(fp) != 0) err = -1;
+    if (!err) (void)fsync(fileno(fp));
+    if (fclose(fp) != 0) err = -1;
+
+    if (err != 0) {
+        unlink(tmp_path);
+        return -1;
+    }
+
+    chmod(tmp_path, 0644);
+    if (rename(tmp_path, path) != 0) {
+        unlink(tmp_path);
+        return -1;
+    }
+    return 0;
 }
 
 // Strict policy name validation: [A-Za-z0-9_-]{1,128} (no slashes, "..", or shell metacharacters)
@@ -48,7 +163,7 @@ static int is_valid_policy_name(const char *name) {
     return 1;
 }
 
-// Safe file copy without shell invocation
+// Safe atomic file copy without shell invocation
 static int copy_file_safe(const char *src, const char *dst) {
     struct stat st_src, st_dst;
     if (stat(src, &st_src) != 0) return -1;
@@ -58,12 +173,43 @@ static int copy_file_safe(const char *src, const char *dst) {
         return 0; // Same underlying file, nothing to copy
     }
 
-    FILE *in = fopen(src, "rb");
-    if (!in) return -1;
+    if (ensure_parent_dir(dst) != 0) return -1;
 
-    FILE *out = fopen(dst, "wb");
+    char dir[1024];
+    const char *slash = strrchr(dst, '/');
+    if (!slash) {
+        snprintf(dir, sizeof(dir), ".");
+    } else if (slash == dst) {
+        snprintf(dir, sizeof(dir), "/");
+    } else {
+        size_t len = (size_t)(slash - dst);
+        if (len >= sizeof(dir)) return -1;
+        memcpy(dir, dst, len);
+        dir[len] = '\0';
+    }
+
+    char tmp_path[1100];
+    if (strcmp(dir, "/") == 0) {
+        snprintf(tmp_path, sizeof(tmp_path), "/.deploy.XXXXXX");
+    } else {
+        snprintf(tmp_path, sizeof(tmp_path), "%.1024s/.deploy.XXXXXX", dir);
+    }
+
+    int tmp_fd = mkstemp(tmp_path);
+    if (tmp_fd < 0) return -1;
+
+    FILE *in = fopen(src, "rb");
+    if (!in) {
+        close(tmp_fd);
+        unlink(tmp_path);
+        return -1;
+    }
+
+    FILE *out = fdopen(tmp_fd, "wb");
     if (!out) {
         fclose(in);
+        close(tmp_fd);
+        unlink(tmp_path);
         return -1;
     }
 
@@ -77,11 +223,22 @@ static int copy_file_safe(const char *src, const char *dst) {
         }
     }
     if (ferror(in)) err = -1;
+    if (!err && fflush(out) != 0) err = -1;
+    if (!err) (void)fsync(fileno(out));
 
     fclose(in);
     if (fclose(out) != 0) err = -1;
-    if (err == 0) chmod(dst, 0644);
-    return err;
+    if (err != 0) {
+        unlink(tmp_path);
+        return -1;
+    }
+
+    chmod(tmp_path, 0644);
+    if (rename(tmp_path, dst) != 0) {
+        unlink(tmp_path);
+        return -1;
+    }
+    return 0;
 }
 
 // Execute command without /bin/sh
@@ -104,13 +261,54 @@ static int run_cmd_no_shell(char *const argv[]) {
     return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
 
+static int binary_exists_in_path(const char *bin) {
+    if (!bin || !bin[0]) return 0;
+    const char *path_env = getenv("PATH");
+    if (!path_env) path_env = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+    char *copy = strdup(path_env);
+    if (!copy) return 0;
+
+    int found = 0;
+    char *saveptr = NULL;
+    for (char *dir = strtok_r(copy, ":", &saveptr); dir != NULL; dir = strtok_r(NULL, ":", &saveptr)) {
+        char full[1024];
+        snprintf(full, sizeof(full), "%s/%s", dir, bin);
+        if (access(full, X_OK) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    free(copy);
+    return found;
+}
+
 static int restart_tetragon_service(void) {
+    if (access("/run/systemd/system", F_OK) != 0) {
+        return -1;
+    }
     if (geteuid() == 0) {
         char *const argv[] = {"systemctl", "restart", "tetragon", NULL};
         return run_cmd_no_shell(argv);
     }
     char *const argv[] = {"sudo", "-n", "systemctl", "restart", "tetragon", NULL};
     return run_cmd_no_shell(argv);
+}
+
+static int reload_tetragon_policy(const char *policy_name, const char *deployed_path, int is_delete) {
+    if (binary_exists_in_path("tetra")) {
+        char *const del_argv[] = {"tetra", "tracingpolicy", "delete", (char *)policy_name, NULL};
+        int del_rc = run_cmd_no_shell(del_argv);
+        if (is_delete) {
+            return del_rc;
+        }
+        if (deployed_path) {
+            char *const add_argv[] = {"tetra", "tracingpolicy", "add", (char *)deployed_path, NULL};
+            if (run_cmd_no_shell(add_argv) == 0) {
+                return 0;
+            }
+        }
+    }
+    return restart_tetragon_service();
 }
 
 // API: GET /api/security/events
@@ -186,8 +384,17 @@ struct MHD_Response *api_security_events_list(struct MHD_Connection *connection,
         if (events[i].src_ip[0]) {
             json_object_object_add(event_obj, "src_ip", json_object_new_string(events[i].src_ip));
         }
+        if (events[i].dst_ip[0]) {
+            json_object_object_add(event_obj, "dst_ip", json_object_new_string(events[i].dst_ip));
+        }
+        if (events[i].dst_port > 0) {
+            json_object_object_add(event_obj, "dst_port", json_object_new_int(events[i].dst_port));
+        }
         if (events[i].file_path[0]) {
             json_object_object_add(event_obj, "file_path", json_object_new_string(events[i].file_path));
+        }
+        if (events[i].file_operation[0]) {
+            json_object_object_add(event_obj, "file_operation", json_object_new_string(events[i].file_operation));
         }
         
         json_object_array_add(events_array, event_obj);
@@ -270,6 +477,7 @@ struct MHD_Response *api_security_policies_list(struct MHD_Connection *connectio
     
     // Read policies from directory
     const char *policy_dir = get_policy_dir();
+    const char *deployed_dir = get_deployed_policy_dir();
     DIR *dir = opendir(policy_dir);
     
     if (dir) {
@@ -289,12 +497,12 @@ struct MHD_Response *api_security_policies_list(struct MHD_Connection *connectio
                 json_object_object_add(policy_obj, "filename", json_object_new_string(entry->d_name));
                 
                 // Check if policy is deployed
-                char deployed_path[512];
-                snprintf(deployed_path, sizeof(deployed_path), "%s/%s", DEPLOYED_POLICY_DIR, entry->d_name);
+                char deployed_path[1024];
+                snprintf(deployed_path, sizeof(deployed_path), "%s/%s", deployed_dir, entry->d_name);
                 json_object_object_add(policy_obj, "deployed", json_object_new_boolean(access(deployed_path, F_OK) == 0));
                 
                 // Get file stats
-                char full_path[512];
+                char full_path[1024];
                 snprintf(full_path, sizeof(full_path), "%s/%s", policy_dir, entry->d_name);
                 struct stat st;
                 if (stat(full_path, &st) == 0) {
@@ -408,20 +616,16 @@ struct MHD_Response *api_security_policy_save(struct MHD_Connection *connection,
         return create_json_response(400, "{\"error\":\"Invalid content field\"}");
     }
     
-    // Write to file
-    char file_path[512];
+    // Write atomically with normalized LF line endings
+    char file_path[1024];
     snprintf(file_path, sizeof(file_path), "%s/%s.yaml", get_policy_dir(), policy_name);
-    
-    FILE *fp = fopen(file_path, "w");
-    if (!fp) {
-        json_object_put(json);
+
+    int wr = write_file_atomic_lf(file_path, content);
+    json_object_put(json);
+    if (wr != 0) {
         return create_json_response(500, "{\"error\":\"Failed to write policy file\"}");
     }
-    
-    fprintf(fp, "%s", content);
-    fclose(fp);
-    json_object_put(json);
-    
+
     return create_json_response(200, "{\"success\":true,\"message\":\"Policy saved\"}");
 }
 
@@ -436,24 +640,27 @@ struct MHD_Response *api_security_policy_deploy(struct MHD_Connection *connectio
     if (!is_valid_policy_name(policy_name)) {
         return create_json_response(400, "{\"error\":\"Invalid policy name\"}");
     }
-    
-    // Copy policy to Tetragon directory
-    char src[512], dst[512];
-    snprintf(src, sizeof(src), "%s/%s.yaml", get_policy_dir(), policy_name);
-    snprintf(dst, sizeof(dst), "%s/%s.yaml", DEPLOYED_POLICY_DIR, policy_name);
 
-    mkdir(DEPLOYED_POLICY_DIR, 0755);
+    // Copy policy atomically to deployed Tetragon directory
+    const char *deployed_dir = get_deployed_policy_dir();
+    char src[1024], dst[1024];
+    snprintf(src, sizeof(src), "%s/%s.yaml", get_policy_dir(), policy_name);
+    snprintf(dst, sizeof(dst), "%s/%s.yaml", deployed_dir, policy_name);
+
+    if (mkdir_p(deployed_dir, 0755) != 0) {
+        return create_json_response(500, "{\"error\":\"Failed to create deployed policy directory\"}");
+    }
 
     if (copy_file_safe(src, dst) != 0) {
         return create_json_response(500, "{\"error\":\"Failed to deploy policy file\"}");
     }
-    
-    int result = restart_tetragon_service();
-    
+
+    int result = reload_tetragon_policy(policy_name, dst, 0);
+
     if (result == 0) {
-        return create_json_response(200, "{\"success\":true,\"message\":\"Policy deployed and Tetragon restarted\"}");
+        return create_json_response(200, "{\"success\":true,\"message\":\"Policy deployed and reloaded\"}");
     } else {
-        return create_json_response(200, "{\"success\":true,\"message\":\"Policy deployed (Tetragon service restart unavailable)\"}");
+        return create_json_response(200, "{\"success\":true,\"message\":\"Policy deployed (Tetragon reload unavailable)\"}");
     }
 }
 
@@ -468,18 +675,17 @@ struct MHD_Response *api_security_policy_delete(struct MHD_Connection *connectio
     if (!is_valid_policy_name(policy_name)) {
         return create_json_response(400, "{\"error\":\"Invalid policy name\"}");
     }
-    
-    char file_path[512];
+
+    char file_path[1024];
     snprintf(file_path, sizeof(file_path), "%s/%s.yaml", get_policy_dir(), policy_name);
-    
+
     if (unlink(file_path) == 0) {
-        // Also remove from deployed location
-        char deployed_path[512];
-        snprintf(deployed_path, sizeof(deployed_path), "%s/%s.yaml", DEPLOYED_POLICY_DIR, policy_name);
+        // Also remove from deployed location and unload from Tetragon
+        char deployed_path[1024];
+        snprintf(deployed_path, sizeof(deployed_path), "%s/%s.yaml", get_deployed_policy_dir(), policy_name);
+        reload_tetragon_policy(policy_name, NULL, 1);
         unlink(deployed_path); // Ignore error if not deployed or same file
-        
-        restart_tetragon_service();
-        
+
         return create_json_response(200, "{\"success\":true,\"message\":\"Policy deleted\"}");
     } else {
         return create_json_response(404, "{\"error\":\"Failed to delete policy\"}");
@@ -503,7 +709,7 @@ struct MHD_Response *api_security_logs(struct MHD_Connection *connection,
     struct json_object *response = json_object_new_object();
     struct json_object *logs_array = json_object_new_array();
 
-    FILE *fp = fopen(TETRAGON_LOG_PATH, "r");
+    FILE *fp = fopen(get_tetragon_log_path(), "r");
     if (fp) {
         char **ring = calloc((size_t)lines, sizeof(char *));
         if (ring) {
@@ -552,7 +758,7 @@ struct MHD_Response *api_security_config_get(struct MHD_Connection *connection,
     }
     
     // Read Tetragon config
-    FILE *fp = fopen(TETRAGON_CONFIG_PATH, "rb");
+    FILE *fp = fopen(get_tetragon_config_path(), "rb");
     if (!fp) {
         return create_json_response(404, "{\"error\":\"Config file not found\"}");
     }
@@ -618,34 +824,82 @@ struct MHD_Response *api_security_config_save(struct MHD_Connection *connection,
         json_object_put(json);
         return create_json_response(400, "{\"error\":\"Invalid content field\"}");
     }
-    
-    // Atomic write to Tetragon config without predictable /tmp path
-    char tmp_path[] = "/etc/tetragon/.tetragon.yaml.XXXXXX";
-    int tmp_fd = mkstemp(tmp_path);
-    if (tmp_fd < 0) {
-        json_object_put(json);
-        return create_json_response(500, "{\"error\":\"Failed to create config temp file\"}");
-    }
-    
-    FILE *fp = fdopen(tmp_fd, "w");
-    if (!fp) {
-        close(tmp_fd);
-        unlink(tmp_path);
-        json_object_put(json);
-        return create_json_response(500, "{\"error\":\"Failed to write config\"}");
-    }
-    
-    fprintf(fp, "%s", content);
-    fclose(fp);
-    chmod(tmp_path, 0644);
-    
-    if (rename(tmp_path, TETRAGON_CONFIG_PATH) != 0) {
-        unlink(tmp_path);
-        json_object_put(json);
-        return create_json_response(500, "{\"error\":\"Failed to replace configuration\"}");
-    }
+
+    int wr = write_file_atomic_lf(get_tetragon_config_path(), content);
     json_object_put(json);
-    
+    if (wr != 0) {
+        return create_json_response(500, "{\"error\":\"Failed to write configuration\"}");
+    }
+
     restart_tetragon_service();
     return create_json_response(200, "{\"success\":true,\"message\":\"Configuration saved\"}");
+}
+
+// API: GET /api/v1/security/correlations
+struct MHD_Response *api_security_correlations_list(struct MHD_Connection *connection,
+                                                   const char *method,
+                                                   const char *url) {
+    (void)url;
+    if (strcmp(method, "GET") != 0) {
+        return create_response(405, "Method not allowed", "text/plain");
+    }
+
+    const char *min_conf_str = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "min_confidence");
+    const char *from_str = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "from");
+    const char *to_str = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "to");
+    const char *limit_str = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "limit");
+
+    float min_confidence = min_conf_str ? (float)atof(min_conf_str) : 0.0f;
+    if (min_confidence < 0.0f) min_confidence = 0.0f;
+    if (min_confidence > 1.0f) min_confidence = 1.0f;
+
+    time_t now_sec = time(NULL);
+    long long from_val = from_str ? atoll(from_str) : (long long)(now_sec - 86400);
+    long long to_val = to_str ? atoll(to_str) : (long long)now_sec;
+
+    // Normalize ms/ns inputs down to Unix seconds (attack_correlation.timestamp stores seconds)
+    if (from_val >= 3000000000000LL) from_val /= 1000000000LL;
+    else if (from_val >= 3000000000LL) from_val /= 1000LL;
+
+    if (to_val >= 3000000000000LL) to_val /= 1000000000LL;
+    else if (to_val >= 3000000000LL) to_val /= 1000LL;
+
+    int limit = limit_str ? atoi(limit_str) : 100;
+    if (limit <= 0) limit = 100;
+    if (limit > 1000) limit = 1000;
+
+    struct attack_correlation_record *corrs = NULL;
+    int count = 0;
+    if (database_list_attack_correlations(g_db, &corrs, &count, min_confidence,
+                                          (time_t)from_val, (time_t)to_val, limit) != 0) {
+        return create_json_response(500, "{\"error\":\"Failed to fetch correlations\"}");
+    }
+
+    struct json_object *response = json_object_new_object();
+    struct json_object *arr = json_object_new_array();
+
+    for (int i = 0; i < count; i++) {
+        struct json_object *obj = json_object_new_object();
+        json_object_object_add(obj, "id", json_object_new_int64(corrs[i].id));
+        json_object_object_add(obj, "timestamp", json_object_new_int64(corrs[i].timestamp));
+        json_object_object_add(obj, "attack_type", json_object_new_string(corrs[i].attack_type));
+        json_object_object_add(obj, "confidence_score", json_object_new_double(corrs[i].confidence_score));
+        json_object_object_add(obj, "network_event_id", json_object_new_int64(corrs[i].network_event_id));
+        json_object_object_add(obj, "security_event_id", json_object_new_int64(corrs[i].security_event_id));
+        json_object_object_add(obj, "source_ip", json_object_new_string(corrs[i].source_ip));
+        json_object_object_add(obj, "description", json_object_new_string(corrs[i].description));
+        json_object_object_add(obj, "details", json_object_new_string(corrs[i].details));
+        json_object_object_add(obj, "created_at", json_object_new_int64(corrs[i].created_at));
+        json_object_array_add(arr, obj);
+    }
+
+    json_object_object_add(response, "correlations", arr);
+    json_object_object_add(response, "total", json_object_new_int(count));
+
+    const char *json_str = json_object_to_json_string(response);
+    struct MHD_Response *mhd_response = create_json_response(200, json_str);
+
+    json_object_put(response);
+    database_free_correlation_list(corrs, count);
+    return mhd_response;
 }

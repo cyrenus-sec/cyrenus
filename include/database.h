@@ -177,6 +177,7 @@ int database_insert_attack(struct database *db, const struct attack_record *atta
 int database_upsert_active_attack(struct database *db, const struct attack_record *attack);
 int database_finalize_stale_attacks(struct database *db, time_t active_cutoff_ts);
 int database_get_attack(struct database *db, int64_t id, struct attack_record *attack);
+int64_t database_find_recent_attack_by_ip(struct database *db, const char *src_ip, time_t cutoff_ts);
 int database_list_attacks(struct database *db, struct attack_record **attacks, int *count, int limit, int offset);
 int database_count_attacks(struct database *db, int *total_count);
 int database_get_attacks_history(struct database *db, struct attack_record **attacks, int *count, int limit);
@@ -291,6 +292,15 @@ struct attack_correlation_record {
 };
 
 // Security event operations
+int db_insert_security_event_ex(int64_t timestamp, const char *event_type, int severity,
+                                 const char *process_name, int pid, int ppid, int uid,
+                                 const char *command, const char *binary_path, 
+                                 const char *parent_binary, const char *action,
+                                 const char *policy_name, const char *src_ip, 
+                                 const char *dst_ip, int dst_port, const char *file_path,
+                                 const char *file_operation, const char *metadata,
+                                 int64_t *new_id_out);
+
 int db_insert_security_event(int64_t timestamp, const char *event_type, int severity,
                               const char *process_name, int pid, int ppid, int uid,
                               const char *command, const char *binary_path, 
@@ -312,6 +322,9 @@ int database_delete_old_security_events(struct database *db, time_t older_than);
 // Attack correlation operations
 int database_insert_attack_correlation(struct database *db, 
                                         const struct attack_correlation_record *corr);
+
+int database_has_recent_correlation(struct database *db, const char *src_ip,
+                                    const char *attack_type, time_t cutoff_ts);
 
 int database_list_attack_correlations(struct database *db,
                                        struct attack_correlation_record **corrs,

@@ -19,9 +19,11 @@ struct map_fds {
     int ip_whitelist_fd;
     int ip_blacklist_fd;
     int geoip_map_fd;
+    int geoip6_map_fd;
     int blocked_countries_fd;
     int global_stats_fd;
     int config_map_fd;
+    int host_ips_fd;
 };
 
 struct api_context {
@@ -30,9 +32,12 @@ struct api_context {
     struct map_fds *fds;
 };
 
-// Shared HTTP JSON response helpers
+// Shared HTTP JSON, CORS, and security header helpers
+void api_helpers_set_config(const struct runtime_config *cfg);
+void api_apply_response_headers(struct MHD_Connection *connection, struct MHD_Response *response);
 enum MHD_Result api_send_json(struct MHD_Connection *connection, int status_code, const char *json_str);
 enum MHD_Result api_send_error(struct MHD_Connection *connection, int status_code, const char *message);
+enum MHD_Result api_send_rate_limited(struct MHD_Connection *connection, int retry_after_sec, const char *message);
 
 // --- Authentication ---
 enum MHD_Result api_auth_login(struct MHD_Connection *connection,
@@ -133,5 +138,6 @@ struct MHD_Response *api_security_policy_delete(struct MHD_Connection *connectio
 struct MHD_Response *api_security_logs(struct MHD_Connection *connection, const char *method, const char *url);
 struct MHD_Response *api_security_config_get(struct MHD_Connection *connection, const char *method, const char *url);
 struct MHD_Response *api_security_config_save(struct MHD_Connection *connection, const char *method, const char *upload_data, size_t upload_data_size);
+struct MHD_Response *api_security_correlations_list(struct MHD_Connection *connection, const char *method, const char *url);
 
 #endif // API_HANDLERS_H

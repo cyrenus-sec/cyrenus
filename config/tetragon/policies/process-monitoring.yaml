@@ -10,6 +10,7 @@ spec:
   # 1. Monitor all process executions
   - call: "sys_execve"
     syscall: true
+    message: "Process execution audit event"
     args:
     - index: 0
       type: "string"
@@ -18,10 +19,11 @@ spec:
       - action: Post
         rateLimit: "1s"
         rateLimitScope: "thread"
-  
+
   # 2. Monitor process exits
   - call: "do_exit"
     syscall: false
+    message: "Process exit audit event"
     args:
     - index: 0
       type: "int"
@@ -30,10 +32,11 @@ spec:
       - action: Post
         rateLimit: "1s"
         rateLimitScope: "thread"
-  
+
   # 3. Monitor SUID/SGID execution
   - call: "sys_execve"
     syscall: true
+    message: "WARNING privilege escalation: SUID/SGID capability execution detected"
     args:
     - index: 0
       type: "string"
@@ -46,19 +49,21 @@ spec:
         - "CAP_SETGID"
       matchActions:
       - action: Post
-  
+
   # 4. Monitor capability changes
   - call: "commit_creds"
     syscall: false
+    message: "Process credential commit event"
     selectors:
     - matchActions:
       - action: Post
         rateLimit: "2s"
         rateLimitScope: "thread"
-  
+
   # 5. Monitor namespace changes (container escapes)
   - call: "sys_setns"
     syscall: true
+    message: "WARNING container escape indicator: namespace switch (setns) detected"
     args:
     - index: 0
       type: "int"
@@ -67,20 +72,22 @@ spec:
     selectors:
     - matchActions:
       - action: Post
-  
+
   # 6. Monitor unshare (namespace creation)
   - call: "sys_unshare"
     syscall: true
+    message: "WARNING container escape indicator: unshare namespace creation detected"
     args:
     - index: 0
       type: "int"
     selectors:
     - matchActions:
       - action: Post
-  
+
   # 7. Monitor process name changes (prctl PR_SET_NAME)
   - call: "sys_prctl"
     syscall: true
+    message: "WARNING suspicious process masquerading (prctl PR_SET_NAME) detected"
     args:
     - index: 0
       type: "int"
@@ -92,26 +99,29 @@ spec:
         - "15"
       matchActions:
       - action: Post
-  
+
   # 8. Monitor fork bombs
   - call: "sys_clone"
     syscall: true
+    message: "Process clone / fork activity monitored"
     selectors:
     - matchActions:
       - action: Post
         rateLimit: "1s"
         rateLimitScope: "thread"
-  
+
   # 9. Monitor core dumps (may indicate exploitation)
   - call: "do_coredump"
     syscall: false
+    message: "WARNING exploitation indicator: process coredump detected"
     selectors:
     - matchActions:
       - action: Post
-  
+
   # 10. Monitor module loading (rootkit detection)
   - call: "sys_init_module"
     syscall: true
+    message: "CRITICAL persistence / rootkit detected: kernel module load attempt"
     args:
     - index: 0
       type: "int"
@@ -122,10 +132,11 @@ spec:
     selectors:
     - matchActions:
       - action: Post
-  
+
   # 11. Monitor BPF program loading (detect malicious eBPF)
   - call: "sys_bpf"
     syscall: true
+    message: "WARNING unauthorized eBPF program load attempt (sys_bpf)"
     args:
     - index: 0
       type: "int"
@@ -137,10 +148,11 @@ spec:
         - "5"
       matchActions:
       - action: Post
-  
+
   # 12. Monitor process memory changes (mprotect)
   - call: "sys_mprotect"
     syscall: true
+    message: "WARNING process injection indicator: executable memory mprotect detected"
     args:
     - index: 0
       type: "uint64"

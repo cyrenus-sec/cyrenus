@@ -64,8 +64,8 @@ struct network_event {
     uint64_t timestamp;
     uint32_t pid;
     char process_name[MAX_PROCESS_NAME];
-    uint32_t src_ip;
-    uint32_t dst_ip;
+    char src_ip[46];
+    char dst_ip[46];
     uint16_t src_port;
     uint16_t dst_port;
     uint8_t protocol;
@@ -94,9 +94,10 @@ struct security_event {
     // Additional context
     char message[MAX_MESSAGE];
     
-    // Network context (if applicable)
-    uint32_t src_ip;
-    uint32_t dst_ip;
+    // Network context (if applicable, canonical IPv4 or IPv6 string)
+    char src_ip[46];
+    char dst_ip[46];
+    uint16_t src_port;
     uint16_t dst_port;
     
     // File context (if applicable)
@@ -153,10 +154,12 @@ uint32_t tetragon_classify_alert_type(const char *message, const char *binary_pa
 
 // Store event in database
 int tetragon_store_event(struct security_event *event);
+int tetragon_store_event_ex(struct security_event *event, int64_t *new_id_out);
 
-// Correlate network and process events
-int tetragon_correlate_events(uint32_t src_ip, uint32_t pid, 
-                               uint64_t network_event_id, uint64_t security_event_id);
+// Correlate network and host security events
+int tetragon_correlate_events(const char *src_ip, uint32_t pid, const char *attack_type,
+                              int64_t network_event_id, int64_t security_event_id,
+                              const char *description, const char *details);
 
 // Generate alert for critical events
 int tetragon_generate_alert(struct security_event *event);

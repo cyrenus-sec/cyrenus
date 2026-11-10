@@ -7,7 +7,7 @@
 int geoip_init(const char *db_path);
 
 // Cleanup
-void geoip_cleanup();
+void geoip_cleanup(void);
 
 // data structure for return info
 struct geoip_info {
@@ -21,7 +21,8 @@ struct geoip_info {
 // Lookup IP
 int geoip_lookup(const char *ip_str, struct geoip_info *info);
 
-// Populate BPF map with GeoIP data
+// Populate BPF maps with GeoIP data (IPv4 map and optional IPv6 map)
+int geoip_populate_bpf_maps(int v4_map_fd, int v6_map_fd);
 int geoip_populate_bpf_map(int map_fd);
 
 #endif // GEOIP_HELPERS_H

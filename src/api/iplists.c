@@ -6,48 +6,9 @@
 #include <time.h>
 #include <bpf/bpf.h>
 #include "../../include/api_handlers.h"
+#include "../../include/attack_info.h"
 #include "../../include/database.h"
 #include "../../include/common.h"
-
-static int parse_ipv4_cidr(const char *input, int explicit_cidr,
-                           char canonical_ip[INET_ADDRSTRLEN],
-                           uint8_t *cidr_out, uint32_t *masked_ip_be_out) {
-    if (!input || input[0] == '\0') return -1;
-
-    char ip_buf[64] = {0};
-    snprintf(ip_buf, sizeof(ip_buf), "%s", input);
-
-    int cidr = explicit_cidr;
-    char *slash = strchr(ip_buf, '/');
-    if (slash) {
-        *slash = '\0';
-        const char *cidr_str = slash + 1;
-        if (*cidr_str == '\0') return -1;
-        char *endptr = NULL;
-        long parsed = strtol(cidr_str, &endptr, 10);
-        if (endptr == cidr_str || *endptr != '\0' || parsed < 1 || parsed > 32) {
-            return -1;
-        }
-        cidr = (int)parsed;
-    }
-    if (cidr < 1 || cidr > 32) return -1;
-
-    struct in_addr addr = {0};
-    if (inet_pton(AF_INET, ip_buf, &addr) != 1) return -1;
-
-    uint32_t mask_host = (cidr == 0) ? 0U : (~0U << (32 - cidr));
-    uint32_t net_ip_host = ntohl(addr.s_addr) & mask_host;
-    uint32_t net_ip_be = htonl(net_ip_host);
-
-    struct in_addr net_addr = { .s_addr = net_ip_be };
-    if (!inet_ntop(AF_INET, &net_addr, canonical_ip, INET_ADDRSTRLEN)) {
-        return -1;
-    }
-
-    *cidr_out = (uint8_t)cidr;
-    *masked_ip_be_out = net_ip_be;
-    return 0;
-}
 
 static int get_target_list_fd(struct api_context *ctx, const char *list_type) {
     if (!ctx || !ctx->fds || !list_type) return -1;
@@ -123,17 +84,18 @@ enum MHD_Result api_iplists_add(struct MHD_Connection *connection,
         return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "list_type must be 'whitelist' or 'blacklist'");
     }
 
-    int explicit_cidr = 32;
+    int explicit_cidr = -1;
     if (json_object_object_get_ex(root, "cidr_range", &j_cidr)) {
         explicit_cidr = json_object_get_int(j_cidr);
     }
 
-    char canonical_ip[INET_ADDRSTRLEN] = {0};
-    uint8_t cidr_val = 32;
-    uint32_t masked_ip_be = 0;
-    if (parse_ipv4_cidr(raw_ip, explicit_cidr, canonical_ip, &cidr_val, &masked_ip_be) != 0) {
+    char canonical_ip[46] = {0};
+    uint8_t cidr_val = 0;
+    struct cyrenus_ip masked_ip = {0};
+    int af = AF_INET;
+    if (cyrenus_parse_cidr(raw_ip, explicit_cidr, canonical_ip, &cidr_val, &masked_ip, &af) != 0) {
         json_object_put(root);
-        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid IPv4 address or CIDR range");
+        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid IPv4/IPv6 address or CIDR range");
     }
 
     const char *reason = "";
@@ -155,8 +117,8 @@ enum MHD_Result api_iplists_add(struct MHD_Connection *connection,
     int map_fd = get_target_list_fd(ctx, list_type);
     if (map_fd >= 0) {
         struct ip_list_key key = {
-            .prefixlen = cidr_val,
-            .ip = masked_ip_be
+            .prefixlen = cyrenus_ip_to_lpm_prefix(af, cidr_val),
+            .ip = masked_ip
         };
         uint8_t val = 1;
         if (bpf_map_update_elem(map_fd, &key, &val, BPF_ANY) != 0) {
@@ -164,10 +126,11 @@ enum MHD_Result api_iplists_add(struct MHD_Connection *connection,
             return api_send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Failed to update BPF IP list map");
         }
 
-        // Adding a host to whitelist should immediately lift any active auto-block for that IP
-        if (strcmp(list_type, "whitelist") == 0 && cidr_val == 32 &&
+        // Adding a host (/32 v4 or /128 v6) to whitelist should immediately lift any active auto-block
+        bool is_single_host = (af == AF_INET && cidr_val == 32) || (af == AF_INET6 && cidr_val == 128);
+        if (strcmp(list_type, "whitelist") == 0 && is_single_host &&
             ctx->fds && ctx->fds->auto_block_fd >= 0) {
-            bpf_map_delete_elem(ctx->fds->auto_block_fd, &masked_ip_be);
+            bpf_map_delete_elem(ctx->fds->auto_block_fd, &masked_ip);
         }
     }
 
@@ -215,13 +178,15 @@ enum MHD_Result api_iplists_delete(struct MHD_Connection *connection,
 
     int map_fd = get_target_list_fd(ctx, entry.list_type);
     if (map_fd >= 0) {
-        struct in_addr addr = {0};
-        if (inet_pton(AF_INET, entry.ip_address, &addr) == 1) {
-            uint8_t cidr = entry.cidr_range <= 32 ? entry.cidr_range : 32;
-            uint32_t mask_host = (cidr == 0) ? 0U : (~0U << (32 - cidr));
+        char canonical_ip[46] = {0};
+        uint8_t cidr_val = 0;
+        struct cyrenus_ip masked_ip = {0};
+        int af = AF_INET;
+        int explicit_cidr = (entry.cidr_range > 0) ? (int)entry.cidr_range : -1;
+        if (cyrenus_parse_cidr(entry.ip_address, explicit_cidr, canonical_ip, &cidr_val, &masked_ip, &af) == 0) {
             struct ip_list_key key = {
-                .prefixlen = cidr,
-                .ip = htonl(ntohl(addr.s_addr) & mask_host)
+                .prefixlen = cyrenus_ip_to_lpm_prefix(af, cidr_val),
+                .ip = masked_ip
             };
             bpf_map_delete_elem(map_fd, &key);
         }

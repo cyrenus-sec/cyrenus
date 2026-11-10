@@ -66,11 +66,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g \
     iproute2 \
     iptables \
+    curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Create directories
-RUN mkdir -p /etc/cyrenus /var/lib/cyrenus /etc/tetragon/policies /var/log/tetragon
+# Create runtime directories with explicit writable permissions for policies & logs
+RUN mkdir -p /etc/cyrenus /var/lib/cyrenus /etc/tetragon/policies /var/log/tetragon && \
+    chmod 755 /etc/cyrenus /var/lib/cyrenus /etc/tetragon /etc/tetragon/policies /var/log/tetragon
 
 # Copy binaries and config
 COPY --from=builder /app/build/cyrenus /usr/local/bin/cyrenus
@@ -82,6 +84,9 @@ COPY config/tetragon/policies /etc/tetragon/policies
 
 # Expose ports (HTTP API/UI + WebSocket)
 EXPOSE 8181 8182
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${CYRENUS_HTTP_PORT:-8181}/api/v1/system/health" || exit 1
 
 # Default command
 CMD ["/usr/local/bin/cyrenus", "/etc/cyrenus/cyrenus.conf"]

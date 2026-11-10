@@ -3,15 +3,16 @@
 
 #include <libwebsockets.h>
 #include "../include/runtime_config.h"
+#include "../include/database.h"
 
 // Initialize the WebSocket server context
-int ws_server_init(struct runtime_config *config);
+int ws_server_init(struct runtime_config *config, struct database *db);
 
 // Start the WebSocket server loop (blocking or threaded)
 void *ws_server_thread(void *arg);
 
 // Cleanup WebSocket resources
-void ws_server_cleanup();
+void ws_server_cleanup(void);
 
 // Broadcast a JSON message to all connected clients
 void ws_broadcast_message(const char *json_message);

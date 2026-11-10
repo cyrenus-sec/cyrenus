@@ -28,9 +28,11 @@ static void init_invalid_fds(struct map_fds *fds) {
     fds->ip_whitelist_fd = -1;
     fds->ip_blacklist_fd = -1;
     fds->geoip_map_fd = -1;
+    fds->geoip6_map_fd = -1;
     fds->blocked_countries_fd = -1;
     fds->global_stats_fd = -1;
     fds->config_map_fd = -1;
+    fds->host_ips_fd = -1;
 }
 
 static int find_map_fd(struct bpf_object *bpf_obj, const char *name, const char *filename) {
@@ -41,12 +43,12 @@ static int find_map_fd(struct bpf_object *bpf_obj, const char *name, const char 
     return fd;
 }
 
-int load_bpf_program(const char *filename, const char *interface, uint32_t host_ip,
+int load_bpf_program(const char *filename, const char *interface,
+                     const struct cyrenus_ip *host_ips, int host_ip_count,
                      const struct attacks_config_t *initial_cfg,
                      struct map_fds *fds, char *xdp_mode_out, size_t xdp_mode_out_len) {
     struct bpf_program *prog;
     int prog_fd, ifindex;
-    int map_fd_host_ip = -1;
 
     if (!fds) return -1;
     init_invalid_fds(fds);
@@ -120,7 +122,7 @@ int load_bpf_program(const char *filename, const char *interface, uint32_t host_
 
     fds->rules_fd = find_map_fd(obj, "rules", filename);
     fds->traffic_fd = find_map_fd(obj, "active_traffic", filename);
-    map_fd_host_ip = find_map_fd(obj, "host_ip", filename);
+    fds->host_ips_fd = find_map_fd(obj, "host_ips", filename);
     fds->udp_flood_fd = find_map_fd(obj, "udp_flood_map", filename);
     fds->dns_track_fd = find_map_fd(obj, "dns_track_map", filename);
     fds->syn_flood_fd = find_map_fd(obj, "syn_flood_map", filename);
@@ -131,37 +133,46 @@ int load_bpf_program(const char *filename, const char *interface, uint32_t host_
     fds->ip_whitelist_fd = find_map_fd(obj, "ip_whitelist", filename);
     fds->ip_blacklist_fd = find_map_fd(obj, "ip_blacklist", filename);
     fds->geoip_map_fd = find_map_fd(obj, "geoip_map", filename);
+    fds->geoip6_map_fd = find_map_fd(obj, "geoip6_map", filename);
     fds->blocked_countries_fd = find_map_fd(obj, "blocked_countries", filename);
     fds->global_stats_fd = find_map_fd(obj, "global_stats", filename);
     fds->config_map_fd = find_map_fd(obj, "config_map", filename);
 
-    if (fds->rules_fd < 0 || fds->traffic_fd < 0 || map_fd_host_ip < 0 ||
+    if (fds->rules_fd < 0 || fds->traffic_fd < 0 || fds->host_ips_fd < 0 ||
         fds->udp_flood_fd < 0 || fds->dns_track_fd < 0 || fds->syn_flood_fd < 0 ||
         fds->attack_info_array_fd < 0 || fds->attack_count_fd < 0 ||
         fds->active_attacks_fd < 0 || fds->auto_block_fd < 0 ||
         fds->ip_whitelist_fd < 0 || fds->ip_blacklist_fd < 0 ||
-        fds->geoip_map_fd < 0 || fds->blocked_countries_fd < 0 ||
-        fds->global_stats_fd < 0 || fds->config_map_fd < 0) {
+        fds->geoip_map_fd < 0 || fds->geoip6_map_fd < 0 ||
+        fds->blocked_countries_fd < 0 || fds->global_stats_fd < 0 ||
+        fds->config_map_fd < 0) {
         goto err_close;
     }
 
-    uint32_t key = 0;
-    if (bpf_map_update_elem(map_fd_host_ip, &key, &host_ip, BPF_ANY) != 0) {
-        fprintf(stderr, "Error updating host_ip map: %s\n", strerror(errno));
-        goto err_close;
+    if (host_ips && host_ip_count > 0) {
+        uint8_t val = 1;
+        for (int i = 0; i < host_ip_count; i++) {
+            if (bpf_map_update_elem(fds->host_ips_fd, &host_ips[i], &val, BPF_ANY) != 0) {
+                fprintf(stderr, "Warning: failed inserting host IP[%d] into host_ips map: %s\n",
+                        i, strerror(errno));
+            }
+        }
+        printf("Registered %d interface host IP(s) in host_ips map\n", host_ip_count);
     }
 
     // Immediately populate config_map so XDP never reads zeroed thresholds
     if (initial_cfg) {
+        uint32_t key = 0;
         if (bpf_map_update_elem(fds->config_map_fd, &key, initial_cfg, BPF_ANY) != 0) {
             fprintf(stderr, "Error populating config_map: %s\n", strerror(errno));
             goto err_close;
         }
-        printf("BPF config_map initialized: SYN=%u UDP=%u ICMP=%u DNS=%u FRAGS=%u AutoBlock=%u(%us)\n",
-               initial_cfg->syn_flood_rate, initial_cfg->udp_flood_rate,
-               initial_cfg->icmp_flood_rate, initial_cfg->dns_amp_rate,
-               initial_cfg->max_frags, initial_cfg->auto_block_enabled,
-               initial_cfg->auto_block_duration_sec);
+        printf("BPF config_map initialized: SYN=%u SYNACK=%u RST=%u ACK=%u UDP=%u ICMP=%u DNS=%u FRAGS=%u AutoBlock=%u(%us)\n",
+               initial_cfg->syn_flood_rate, initial_cfg->synack_flood_rate,
+               initial_cfg->rst_flood_rate, initial_cfg->ack_flood_rate,
+               initial_cfg->udp_flood_rate, initial_cfg->icmp_flood_rate,
+               initial_cfg->dns_amp_rate, initial_cfg->max_frags,
+               initial_cfg->auto_block_enabled, initial_cfg->auto_block_duration_sec);
     }
 
     return 0;

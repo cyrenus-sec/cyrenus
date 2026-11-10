@@ -1,0 +1,33 @@
+services:
+  cyrenus:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: cyrenus
+    restart: unless-stopped
+    network_mode: host
+    privileged: false
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - BPF
+      - PERFMON
+    env_file:
+      - .env
+    volumes:
+      - ./cyrenus.conf:/etc/cyrenus/cyrenus.conf:ro
+      - cyrenus_data:/var/lib/cyrenus:rw
+      - /etc/tetragon:/etc/tetragon:rw
+      - /var/log/tetragon:/var/log/tetragon:rw
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+      - /sys/kernel/debug:/sys/kernel/debug:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:$${CYRENUS_HTTP_PORT:-8181}/api/v1/system/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  cyrenus_data:
+

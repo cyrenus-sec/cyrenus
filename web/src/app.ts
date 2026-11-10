@@ -14,6 +14,7 @@ interface TrafficFlow {
     dst_port: number;
     proto: number;
     proto_name?: string;
+    ip_version?: number;
     bytes: number;
     packets: number;
     direction?: 'IN' | 'OUT';
@@ -97,7 +98,10 @@ interface SecurityEvent {
     action: string;
     policy_name: string;
     src_ip?: string;
+    dst_ip?: string;
+    dst_port?: number;
     file_path?: string;
+    file_operation?: string;
 }
 
 interface SecurityPolicy {
@@ -106,6 +110,19 @@ interface SecurityPolicy {
     deployed: boolean;
     size?: number;
     modified?: number;
+}
+
+interface AttackCorrelation {
+    id: number;
+    timestamp: number;
+    attack_type: string;
+    confidence_score: number;
+    network_event_id: number;
+    security_event_id: number;
+    source_ip: string;
+    description: string;
+    details: string;
+    created_at: number;
 }
 
 interface ApiKeyItem {
@@ -122,17 +139,30 @@ class WSClient {
     private ws: WebSocket | null = null;
     private port: number;
     private reconnectInterval = 3000;
+    private readonly maxReconnectInterval = 15000;
     private reconnectTimer: number | null = null;
     private closedManually = false;
 
     constructor(port: number) {
         this.port = port;
-        this.connect();
+        if (localStorage.getItem('token')) {
+            this.connect();
+        }
     }
 
     private buildUrl(): string {
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${proto}//${window.location.hostname}:${this.port}`;
+        const token = localStorage.getItem('token') || '';
+        const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+        if (
+            window.location.protocol === 'https:' ||
+            window.location.port === '' ||
+            window.location.port === '80' ||
+            window.location.port === '443'
+        ) {
+            return `${proto}//${window.location.host}/ws${tokenParam}`;
+        }
+        return `${proto}//${window.location.hostname}:${this.port}/${tokenParam}`;
     }
 
     getPort(): number {
@@ -152,11 +182,19 @@ class WSClient {
             old.onclose = null;
             old.close();
         }
-        this.connect();
+        if (localStorage.getItem('token')) {
+            this.connect();
+        }
+    }
+
+    ensureConnected() {
+        if (!this.ws && !this.closedManually && localStorage.getItem('token')) {
+            this.connect();
+        }
     }
 
     connect() {
-        if (this.closedManually) return;
+        if (this.closedManually || !localStorage.getItem('token')) return;
         if (this.reconnectTimer !== null) {
             window.clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
@@ -167,6 +205,7 @@ class WSClient {
             this.ws = ws;
 
             ws.onopen = () => {
+                this.reconnectInterval = 3000;
                 window.dispatchEvent(new CustomEvent('ws-status', { detail: { connected: true, connecting: false } }));
             };
 
@@ -186,14 +225,18 @@ class WSClient {
             ws.onclose = () => {
                 this.ws = null;
                 window.dispatchEvent(new CustomEvent('ws-status', { detail: { connected: false, connecting: false } }));
-                if (!this.closedManually) {
-                    this.reconnectTimer = window.setTimeout(() => this.connect(), this.reconnectInterval);
+                if (!this.closedManually && localStorage.getItem('token')) {
+                    const wait = this.reconnectInterval;
+                    this.reconnectInterval = Math.min(this.maxReconnectInterval, Math.round(this.reconnectInterval * 1.5));
+                    this.reconnectTimer = window.setTimeout(() => this.connect(), wait);
                 }
             };
         } catch {
             window.dispatchEvent(new CustomEvent('ws-status', { detail: { connected: false, connecting: false } }));
-            if (!this.closedManually) {
-                this.reconnectTimer = window.setTimeout(() => this.connect(), this.reconnectInterval);
+            if (!this.closedManually && localStorage.getItem('token')) {
+                const wait = this.reconnectInterval;
+                this.reconnectInterval = Math.min(this.maxReconnectInterval, Math.round(this.reconnectInterval * 1.5));
+                this.reconnectTimer = window.setTimeout(() => this.connect(), wait);
             }
         }
     }
@@ -297,7 +340,11 @@ document.addEventListener('alpine:init', () => {
                     frag_drops: 0,
                     rule_drops: 0,
                     geo_drops: 0,
-                    autoblock_drops: 0
+                    autoblock_drops: 0,
+                    amp_drops: 0,
+                    ack_drops: 0,
+                    rst_drops: 0,
+                    malformed_drops: 0
                 }
             },
 
@@ -355,9 +402,11 @@ document.addEventListener('alpine:init', () => {
             geoLookupError: '',
 
             // Host Security (Tetragon) State
-            securitySubTab: 'events' as 'events' | 'policies' | 'logs',
+            securitySubTab: 'events' as 'events' | 'correlations' | 'policies' | 'logs',
             security: {
                 events: [] as SecurityEvent[],
+                correlations: [] as AttackCorrelation[],
+                corrMinConfidence: 0,
                 stats: {
                     total_events: 0,
                     critical_alerts: 0,
@@ -375,7 +424,10 @@ document.addEventListener('alpine:init', () => {
                     limit: 50
                 },
                 currentPolicy: { name: '', content: '', isNew: false },
-                showModal: false
+                showModal: false,
+                showConfigModal: false,
+                tetragonConfigContent: '',
+                savingConfig: false
             },
 
             // Settings & API Keys State
@@ -396,7 +448,10 @@ document.addEventListener('alpine:init', () => {
                 auto_block_duration_sec: 300,
                 global_syn_rate: 5000,
                 global_udp_rate: 25000,
-                max_dns_response_size: 2048
+                max_dns_response_size: 2048,
+                rst_flood_rate: 500,
+                ack_flood_rate: 2500,
+                synack_flood_rate: 1000
             },
             savingSettings: false,
             apiKeys: [] as ApiKeyItem[],
@@ -410,6 +465,7 @@ document.addEventListener('alpine:init', () => {
                     return;
                 }
 
+                wsClient.ensureConnected();
                 this.initChart();
 
                 // Load initial data in parallel
@@ -422,6 +478,7 @@ document.addEventListener('alpine:init', () => {
                 this.fetchIpLists();
                 this.fetchGeoRules();
                 this.fetchSecurityStats();
+                this.fetchSecurityCorrelations();
                 this.fetchApiKeys();
 
                 // Auto-refresh live traffic while user is viewing Traffic tab
@@ -494,6 +551,14 @@ document.addEventListener('alpine:init', () => {
                         this.fetchSecurityStats();
                         if (this.currentPage === 'security') {
                             this.fetchSecurityEvents();
+                            this.fetchSecurityCorrelations();
+                        }
+                    } else if (msg.type === 'correlation_alert' && msg.data) {
+                        const c = msg.data;
+                        const conf = Math.round((Number(c.confidence_score) || 0) * 100);
+                        this.notify(`Correlated Threat (${conf}%): ${c.attack_type || 'Intrusion'} — ${c.source_ip || 'host'}`, 'error');
+                        if (this.currentPage === 'security') {
+                            this.fetchSecurityCorrelations();
                         }
                     }
                 });
@@ -559,6 +624,7 @@ document.addEventListener('alpine:init', () => {
                 } else if (page === 'security') {
                     this.fetchSecurityStats();
                     this.fetchSecurityEvents();
+                    this.fetchSecurityCorrelations();
                     this.fetchSecurityPolicies();
                     if (this.securitySubTab === 'logs') this.fetchSecurityLogs();
                 } else if (page === 'settings') {
@@ -582,6 +648,7 @@ document.addEventListener('alpine:init', () => {
                         await Promise.all([
                             this.fetchSecurityStats(),
                             this.fetchSecurityEvents(),
+                            this.fetchSecurityCorrelations(),
                             this.fetchSecurityPolicies(),
                             this.securitySubTab === 'logs' ? this.fetchSecurityLogs() : Promise.resolve()
                         ]);
@@ -650,6 +717,9 @@ document.addEventListener('alpine:init', () => {
                     this.settings.global_syn_rate = 2000;
                     this.settings.global_udp_rate = 10000;
                     this.settings.max_dns_response_size = 1536;
+                    this.settings.rst_flood_rate = 150;
+                    this.settings.ack_flood_rate = 1000;
+                    this.settings.synack_flood_rate = 300;
                     this.notify('Strict preset staged — click Save & Apply to enforce.', 'info');
                 } else if (preset === 'balanced') {
                     this.settings.syn_flood_rate = 500;
@@ -662,6 +732,9 @@ document.addEventListener('alpine:init', () => {
                     this.settings.global_syn_rate = 5000;
                     this.settings.global_udp_rate = 25000;
                     this.settings.max_dns_response_size = 2048;
+                    this.settings.rst_flood_rate = 500;
+                    this.settings.ack_flood_rate = 2500;
+                    this.settings.synack_flood_rate = 1000;
                     this.notify('Balanced preset staged — click Save & Apply to enforce.', 'info');
                 } else {
                     this.settings.syn_flood_rate = 3000;
@@ -674,6 +747,9 @@ document.addEventListener('alpine:init', () => {
                     this.settings.global_syn_rate = 25000;
                     this.settings.global_udp_rate = 100000;
                     this.settings.max_dns_response_size = 4096;
+                    this.settings.rst_flood_rate = 2500;
+                    this.settings.ack_flood_rate = 15000;
+                    this.settings.synack_flood_rate = 5000;
                     this.notify('High-Bandwidth preset staged — click Save & Apply to enforce.', 'info');
                 }
             },
@@ -691,7 +767,10 @@ document.addEventListener('alpine:init', () => {
                         auto_block_duration_sec: Number(this.settings.auto_block_duration_sec),
                         global_syn_rate: Number(this.settings.global_syn_rate),
                         global_udp_rate: Number(this.settings.global_udp_rate),
-                        max_dns_response_size: Number(this.settings.max_dns_response_size)
+                        max_dns_response_size: Number(this.settings.max_dns_response_size),
+                        rst_flood_rate: Number(this.settings.rst_flood_rate),
+                        ack_flood_rate: Number(this.settings.ack_flood_rate),
+                        synack_flood_rate: Number(this.settings.synack_flood_rate)
                     };
                     const res = await this.apiFetch('/api/v1/system/settings', {
                         method: 'POST',
@@ -907,12 +986,13 @@ document.addEventListener('alpine:init', () => {
             },
 
             async promoteBlockToBlacklist(ip: string) {
+                const defaultCidr = ip.includes(':') ? 128 : 32;
                 try {
                     const res = await this.apiFetch('/api/v1/iplists', {
                         method: 'POST',
                         body: JSON.stringify({
                             ip_address: ip,
-                            cidr_range: 32,
+                            cidr_range: defaultCidr,
                             list_type: 'blacklist',
                             reason: 'Promoted from dynamic auto-block',
                             ttl_sec: 0
@@ -939,8 +1019,8 @@ document.addEventListener('alpine:init', () => {
 
             // --- Quick IP Actions ---
             async blockIP(ip: string) {
-                if (!ip || ip === '0.0.0.0') {
-                    this.notify('Cannot block unspecified aggregate IP 0.0.0.0', 'error');
+                if (!ip || ip === '0.0.0.0' || ip === '::') {
+                    this.notify('Cannot block unspecified aggregate IP', 'error');
                     return;
                 }
                 try {
@@ -967,16 +1047,17 @@ document.addEventListener('alpine:init', () => {
             },
 
             async whitelistIP(ip: string, reason = 'Whitelisted via Dashboard UI') {
-                if (!ip || ip === '0.0.0.0') {
-                    this.notify('Cannot whitelist 0.0.0.0', 'error');
+                if (!ip || ip === '0.0.0.0' || ip === '::') {
+                    this.notify('Cannot whitelist unspecified IP', 'error');
                     return;
                 }
+                const defaultCidr = ip.includes(':') ? 128 : 32;
                 try {
                     const res = await this.apiFetch('/api/v1/iplists', {
                         method: 'POST',
                         body: JSON.stringify({
                             ip_address: ip,
-                            cidr_range: 32,
+                            cidr_range: defaultCidr,
                             list_type: 'whitelist',
                             reason,
                             ttl_sec: 0
@@ -984,7 +1065,7 @@ document.addEventListener('alpine:init', () => {
                     });
                     const data = await res.json().catch(() => ({}));
                     if (res.ok) {
-                        this.notify(`Whitelisted ${ip}/32 (auto-block lifted)`, 'success');
+                        this.notify(`Whitelisted ${ip}/${defaultCidr} (auto-block lifted)`, 'success');
                         await Promise.all([this.fetchIpLists(), this.fetchBlocks(), this.fetchAttacks(false), this.fetchSystemStats()]);
                     } else {
                         this.notify(data.error || `Failed to whitelist ${ip}`, 'error');
@@ -1035,7 +1116,7 @@ document.addEventListener('alpine:init', () => {
             async deleteRule(rule: FirewallRule) {
                 if (!confirm(`Delete ${rule.action === 1 ? 'DROP' : 'PASS'} rule for ${rule.ip}?`)) return;
                 try {
-                    const protoMap: Record<string, number> = { ALL: 0, TCP: 6, UDP: 17, ICMP: 1 };
+                    const protoMap: Record<string, number> = { ALL: 0, TCP: 6, UDP: 17, ICMP: 1, ICMPV6: 58 };
                     const protoNum = rule.proto_num !== undefined ? rule.proto_num : (protoMap[String(rule.proto).toUpperCase()] ?? 0);
                     const key = rule.rule_key || `${rule.ip}_${rule.port}_${protoNum}`;
                     const res = await this.apiFetch(`/api/v1/rules/${encodeURIComponent(key)}`, {
@@ -1249,6 +1330,56 @@ document.addEventListener('alpine:init', () => {
                     this.security.logs = data.logs || [];
                 } catch (e) {
                     console.error('Security logs failed', e);
+                }
+            },
+
+            async fetchSecurityCorrelations() {
+                try {
+                    const minConf = Number(this.security.corrMinConfidence) || 0;
+                    const res = await this.apiFetch(`/api/v1/security/correlations?min_confidence=${encodeURIComponent(String(minConf))}&limit=100`);
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    this.security.correlations = Array.isArray(data.correlations) ? data.correlations : [];
+                } catch (e) {
+                    console.error('Security correlations failed', e);
+                }
+            },
+
+            async openTetragonConfigModal() {
+                this.security.tetragonConfigContent = '';
+                this.security.showConfigModal = true;
+                try {
+                    const res = await this.apiFetch('/api/v1/security/config');
+                    const data = await res.json().catch(() => ({}));
+                    if (res.ok) {
+                        this.security.tetragonConfigContent = data.content || '';
+                    } else {
+                        this.security.tetragonConfigContent = 'enable-process-cred: true\nenable-process-ns: true\n';
+                        this.notify(data.error || 'Tetragon config not found yet — prefilled starter YAML', 'info');
+                    }
+                } catch {
+                    this.notify('Failed to fetch Tetragon configuration', 'error');
+                }
+            },
+
+            async saveTetragonConfig() {
+                this.security.savingConfig = true;
+                try {
+                    const res = await this.apiFetch('/api/v1/security/config', {
+                        method: 'POST',
+                        body: JSON.stringify({ content: this.security.tetragonConfigContent })
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (res.ok) {
+                        this.notify(data.message || 'Tetragon configuration saved', 'success');
+                        this.security.showConfigModal = false;
+                    } else {
+                        this.notify(data.error || 'Failed to save configuration', 'error');
+                    }
+                } catch {
+                    this.notify('Network error saving Tetragon configuration', 'error');
+                } finally {
+                    this.security.savingConfig = false;
                 }
             },
 
@@ -1561,6 +1692,7 @@ document.addEventListener('alpine:init', () => {
                 if (proto === 6) return 'TCP';
                 if (proto === 17) return 'UDP';
                 if (proto === 1) return 'ICMP';
+                if (proto === 58) return 'ICMPv6';
                 return String(proto);
             },
 

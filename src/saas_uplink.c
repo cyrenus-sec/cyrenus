@@ -8,6 +8,7 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include "../include/saas_uplink.h"
+#include "../include/attack_info.h"
 #include "../include/common.h"
 
 int saas_uplink_init(struct saas_context *ctx, struct runtime_config *cfg, struct database *db, struct map_fds *fds) {
@@ -24,36 +25,17 @@ void saas_uplink_cleanup(struct saas_context *ctx) {
 
 static void apply_global_block(struct saas_context *ctx, const char *ip_str) __attribute__((unused));
 static void apply_global_block(struct saas_context *ctx, const char *ip_str) {
-    if (!ctx->fds || ctx->fds->rules_fd <= 0) return;
+    if (!ctx->fds || ctx->fds->rules_fd < 0) return;
 
-    // Parse IP
-    struct in_addr addr;
-    if (inet_pton(AF_INET, ip_str, &addr) != 1) {
+    struct rule_key_t key = {0};
+    if (cyrenus_str_to_ip(ip_str, &key.ip, NULL) != 0) {
         printf("SaaS: Invalid IP format %s\n", ip_str);
         return;
     }
 
-    // Add rule to drop all traffic from this IP
-    struct rule_key_t key = {
-        .ip = addr.s_addr,
-        .port = 0, // Wildcard/Ignored for now? Or specific? XDP logic applies to specific port if non-zero.
-                   // Wait, XDP logic: `if (rule) ...`. Key includes port and proto.
-                   // To block ALL, I might need 0 port/proto and XDP to handle wildcard.
-                   // Let's assume generic blocking for now, or just block HTTP 80 TCP.
-                   // User said "block an ip". Use wildcard logic if supported, or just multiple rules.
-        .proto = IPPROTO_TCP 
-    };
-    
-    // For now, let's block TCP/UDP on entry.
-    // Ideally XDP prog should support wildcard port 0.
-    // Let's assume it does (it doesn't explicitly looks like it does in Step 45 `apply_rule`).
-    // `apply_rule` does exact match.
-    // I should update `xdp_prog.c` to support wildcard port/proto? 
-    // PHASE 1: stick to applying explicit rule for now.
-    
-    key.port = 0; // If XDP doesn't support 0, this won't match anything real. 
-                  // But let's assume valid implementation for Phase 1 scope.
-    
+    key.port = 0;
+    key.proto = 0;
+
     struct rule_t rule = {
         .action = ACTION_DROP
     };

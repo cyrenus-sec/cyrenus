@@ -3,8 +3,198 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <arpa/inet.h>
 #include <bpf/bpf.h>
+
+bool cyrenus_ip_is_zero(const struct cyrenus_ip *ip) {
+    if (!ip) return true;
+    return (ip->addr[0] | ip->addr[1] | ip->addr[2] | ip->addr[3]) == 0;
+}
+
+bool cyrenus_ip_is_v4(const struct cyrenus_ip *ip) {
+    if (!ip) return false;
+    return (ip->addr[0] == 0 && ip->addr[1] == 0 && ip->addr[2] == htonl(0x0000ffff));
+}
+
+bool cyrenus_ip_equals(const struct cyrenus_ip *a, const struct cyrenus_ip *b) {
+    if (!a || !b) return false;
+    return memcmp(a->addr, b->addr, sizeof(a->addr)) == 0;
+}
+
+void cyrenus_ip_from_v4(struct cyrenus_ip *out, uint32_t ipv4_be) {
+    if (!out) return;
+    out->addr[0] = 0;
+    out->addr[1] = 0;
+    out->addr[2] = htonl(0x0000ffff);
+    out->addr[3] = ipv4_be;
+}
+
+void cyrenus_ip_from_v6(struct cyrenus_ip *out, const struct in6_addr *in6) {
+    if (!out || !in6) return;
+    memcpy(out->addr, in6->s6_addr, 16);
+}
+
+int cyrenus_str_to_ip(const char *str, struct cyrenus_ip *out, int *af_out) {
+    if (!str || str[0] == '\0' || !out) return -1;
+
+    struct in_addr v4;
+    if (inet_pton(AF_INET, str, &v4) == 1) {
+        cyrenus_ip_from_v4(out, v4.s_addr);
+        if (af_out) *af_out = AF_INET;
+        return 0;
+    }
+
+    struct in6_addr v6;
+    if (inet_pton(AF_INET6, str, &v6) == 1) {
+        if (IN6_IS_ADDR_V4MAPPED(&v6)) {
+            uint32_t v4_be = 0;
+            memcpy(&v4_be, v6.s6_addr + 12, 4);
+            cyrenus_ip_from_v4(out, v4_be);
+            if (af_out) *af_out = AF_INET;
+        } else {
+            cyrenus_ip_from_v6(out, &v6);
+            if (af_out) *af_out = AF_INET6;
+        }
+        return 0;
+    }
+
+    return -1;
+}
+
+void cyrenus_ip_to_str(const struct cyrenus_ip *ip, char *buf, size_t len) {
+    if (!buf || len == 0) return;
+    if (!ip || cyrenus_ip_is_zero(ip)) {
+        snprintf(buf, len, "0.0.0.0");
+        return;
+    }
+    if (cyrenus_ip_is_v4(ip)) {
+        struct in_addr a = { .s_addr = ip->addr[3] };
+        if (!inet_ntop(AF_INET, &a, buf, (socklen_t)len)) {
+            snprintf(buf, len, "0.0.0.0");
+        }
+        return;
+    }
+    if (!inet_ntop(AF_INET6, ip->addr, buf, (socklen_t)len)) {
+        snprintf(buf, len, "::");
+    }
+}
+
+int cyrenus_parse_cidr(const char *input, int explicit_cidr,
+                       char canonical_ip[46], uint8_t *cidr_out,
+                       struct cyrenus_ip *masked_out, int *af_out) {
+    if (!input || input[0] == '\0' || !canonical_ip || !cidr_out || !masked_out) {
+        return -1;
+    }
+
+    char ip_buf[80] = {0};
+    snprintf(ip_buf, sizeof(ip_buf), "%s", input);
+
+    int has_slash = 0;
+    int parsed_cidr = explicit_cidr;
+    char *slash = strchr(ip_buf, '/');
+    if (slash) {
+        *slash = '\0';
+        const char *cidr_str = slash + 1;
+        if (*cidr_str == '\0') return -1;
+        char *endptr = NULL;
+        long val = strtol(cidr_str, &endptr, 10);
+        if (endptr == cidr_str || *endptr != '\0' || val < 1 || val > 128) {
+            return -1;
+        }
+        parsed_cidr = (int)val;
+        has_slash = 1;
+    }
+
+    struct cyrenus_ip raw_ip;
+    int af = AF_INET;
+    if (cyrenus_str_to_ip(ip_buf, &raw_ip, &af) != 0) {
+        return -1;
+    }
+
+    if (af == AF_INET) {
+        int cidr = (!has_slash && parsed_cidr <= 0) ? 32 : parsed_cidr;
+        if (cidr < 1 || cidr > 32) return -1;
+
+        uint32_t mask_host = (~0U << (32 - cidr));
+        uint32_t net_ip_be = htonl(ntohl(raw_ip.addr[3]) & mask_host);
+        struct in_addr net_addr = { .s_addr = net_ip_be };
+        if (!inet_ntop(AF_INET, &net_addr, canonical_ip, 46)) {
+            return -1;
+        }
+        cyrenus_ip_from_v4(masked_out, net_ip_be);
+        *cidr_out = (uint8_t)cidr;
+        if (af_out) *af_out = AF_INET;
+        return 0;
+    }
+
+    int cidr = (!has_slash && parsed_cidr <= 0) ? 128 : parsed_cidr;
+    if (cidr < 1 || cidr > 128) return -1;
+
+    uint8_t bytes[16];
+    memcpy(bytes, raw_ip.addr, 16);
+    int full_bytes = cidr / 8;
+    int rem_bits = cidr % 8;
+    if (full_bytes < 16) {
+        if (rem_bits > 0) {
+            bytes[full_bytes] &= (uint8_t)(0xFFU << (8 - rem_bits));
+            full_bytes++;
+        }
+        for (int i = full_bytes; i < 16; i++) {
+            bytes[i] = 0;
+        }
+    }
+
+    struct in6_addr net6;
+    memcpy(net6.s6_addr, bytes, 16);
+    if (!inet_ntop(AF_INET6, &net6, canonical_ip, 46)) {
+        return -1;
+    }
+    cyrenus_ip_from_v6(masked_out, &net6);
+    *cidr_out = (uint8_t)cidr;
+    if (af_out) *af_out = AF_INET6;
+    return 0;
+}
+
+uint32_t cyrenus_ip_to_lpm_prefix(int af, uint8_t cidr) {
+    if (af == AF_INET) {
+        uint8_t clamped = (cidr >= 1 && cidr <= 32) ? cidr : 32;
+        return (uint32_t)(96 + clamped);
+    }
+    uint8_t clamped = (cidr >= 1 && cidr <= 128) ? cidr : 128;
+    return (uint32_t)clamped;
+}
+
+void cyrenus_ip_to_hex(const struct cyrenus_ip *ip, char hex_out[33]) {
+    static const char hex[] = "0123456789abcdef";
+    const uint8_t *bytes = (const uint8_t *)ip->addr;
+    if (!ip || !hex_out) return;
+    for (int i = 0; i < 16; i++) {
+        hex_out[i * 2] = hex[(bytes[i] >> 4) & 0x0F];
+        hex_out[i * 2 + 1] = hex[bytes[i] & 0x0F];
+    }
+    hex_out[32] = '\0';
+}
+
+static int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+int cyrenus_hex_to_ip(const char *hex, struct cyrenus_ip *out) {
+    if (!hex || !out || strlen(hex) != 32) return -1;
+    uint8_t bytes[16];
+    for (int i = 0; i < 16; i++) {
+        int hi = hex_nibble(hex[i * 2]);
+        int lo = hex_nibble(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        bytes[i] = (uint8_t)((hi << 4) | lo);
+    }
+    memcpy(out->addr, bytes, 16);
+    return 0;
+}
 
 const char *get_proto_name(uint8_t proto) {
     switch (proto) {
@@ -33,6 +223,11 @@ const char *get_attack_name_by_id(uint8_t attack_id) {
         case ATK_ID_GEOIP_BLOCK:      return "GeoIP Block";
         case ATK_ID_GLOBAL_SYN_FLOOD: return "Distributed SYN Flood";
         case ATK_ID_GLOBAL_UDP_FLOOD: return "Distributed UDP Flood";
+        case ATK_ID_UDP_AMP:          return "UDP Amplification";
+        case ATK_ID_ACK_FLOOD:        return "TCP ACK Flood";
+        case ATK_ID_RST_FLOOD:        return "TCP RST Flood";
+        case ATK_ID_SYNACK_FLOOD:     return "SYN-ACK Reflection";
+        case ATK_ID_MALFORMED_PKT:    return "Malformed Packet";
         default:                      return "Unknown Attack";
     }
 }
@@ -46,12 +241,19 @@ int get_attack_severity(uint8_t attack_id, uint32_t peak_pps, uint32_t packets) 
     }
     if (attack_id == ATK_ID_SYN_FLOOD ||
         attack_id == ATK_ID_DNS_AMP ||
+        attack_id == ATK_ID_UDP_AMP ||
+        attack_id == ATK_ID_SYNACK_FLOOD ||
+        attack_id == ATK_ID_RST_FLOOD ||
+        attack_id == ATK_ID_ACK_FLOOD ||
         attack_id == ATK_ID_FRAG_ATTACK ||
         peak_pps >= 2000 ||
         packets >= 10000) {
         return 3; // High
     }
-    if (attack_id == ATK_ID_GEOIP_BLOCK || peak_pps >= 200 || packets >= 500) {
+    if (attack_id == ATK_ID_GEOIP_BLOCK ||
+        attack_id == ATK_ID_MALFORMED_PKT ||
+        peak_pps >= 200 ||
+        packets >= 500) {
         return 2; // Medium
     }
     return 1; // Low
@@ -128,11 +330,11 @@ int get_active_attacks(struct active_attack_entry **entries, int map_fd_active_a
 
 void print_attack_info(struct attack_info *attack) {
     if (!attack) return;
-    char src_ip_str[32] = {0};
-    if (attack->src_ip == 0) {
+    char src_ip_str[64] = {0};
+    if (cyrenus_ip_is_zero(&attack->src_ip)) {
         snprintf(src_ip_str, sizeof(src_ip_str), "0.0.0.0 (Global)");
     } else {
-        inet_ntop(AF_INET, &(attack->src_ip), src_ip_str, INET_ADDRSTRLEN);
+        cyrenus_ip_to_str(&attack->src_ip, src_ip_str, sizeof(src_ip_str));
     }
 
     printf("Attack Type: %s\n", attack->attack_type[0] ? attack->attack_type : get_attack_name_by_id(attack->attack_id));

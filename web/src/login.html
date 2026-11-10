@@ -144,6 +144,11 @@
                         window.location.href = '/index.html';
                         return;
                     }
+                    if (res.status === 429) {
+                        const retrySec = res.headers.get('Retry-After') || data.retry_after_sec || '';
+                        showError(data.error || (retrySec ? `Too many attempts. Retry in ${retrySec}s.` : 'Too many login attempts. Please wait.'));
+                        return;
+                    }
                     showError(data.error || 'Invalid username or password');
                 } catch (_) {
                     showError('Network error. Unable to reach Cyrenus backend.');

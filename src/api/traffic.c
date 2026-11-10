@@ -32,12 +32,11 @@ enum MHD_Result api_traffic_stats(struct MHD_Connection *connection,
         void *cur_key = NULL;
         while (bpf_map_get_next_key(fds->traffic_fd, cur_key, &next_key) == 0) {
             if (bpf_map_lookup_elem(fds->traffic_fd, &next_key, &info) == 0) {
-                char src_ip[INET_ADDRSTRLEN] = {0};
-                char dst_ip[INET_ADDRSTRLEN] = {0};
-                inet_ntop(AF_INET, &info.src_ip, src_ip, sizeof(src_ip));
-                inet_ntop(AF_INET, &info.dst_ip, dst_ip, sizeof(dst_ip));
+                char src_ip[INET6_ADDRSTRLEN] = {0};
+                char dst_ip[INET6_ADDRSTRLEN] = {0};
+                cyrenus_ip_to_str(&info.src_ip, src_ip, sizeof(src_ip));
+                cyrenus_ip_to_str(&info.dst_ip, dst_ip, sizeof(dst_ip));
 
-                // Check if source IP is currently auto-blocked or explicitly blacklisted
                 bool is_blocked = false;
                 if (fds->auto_block_fd >= 0) {
                     struct auto_block_val ab;
@@ -47,7 +46,7 @@ enum MHD_Result api_traffic_stats(struct MHD_Connection *connection,
                     }
                 }
                 if (!is_blocked && fds->ip_blacklist_fd >= 0) {
-                    struct ip_list_key lk = { .prefixlen = 32, .ip = info.src_ip };
+                    struct ip_list_key lk = { .prefixlen = 128, .ip = info.src_ip };
                     uint8_t bval = 0;
                     if (bpf_map_lookup_elem(fds->ip_blacklist_fd, &lk, &bval) == 0 && bval == 1) {
                         is_blocked = true;
@@ -66,6 +65,8 @@ enum MHD_Result api_traffic_stats(struct MHD_Connection *connection,
                 json_object *json_info = json_object_new_object();
                 json_object_object_add(json_info, "src_ip", json_object_new_string(src_ip));
                 json_object_object_add(json_info, "dst_ip", json_object_new_string(dst_ip));
+                json_object_object_add(json_info, "ip_version",
+                                       json_object_new_int(info.ip_version == 6 ? 6 : 4));
                 json_object_object_add(json_info, "src_port", json_object_new_int(info.src_port));
                 json_object_object_add(json_info, "dst_port", json_object_new_int(info.dst_port));
                 json_object_object_add(json_info, "proto", json_object_new_int(info.proto));

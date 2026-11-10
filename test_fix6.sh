@@ -1,105 +1,60 @@
 #!/bin/bash
-# Quick automated test for Fix #6: Connection State Context
+# Quick automated verification for Connection State Context (/api/v1)
 
-set -e
+set -euo pipefail
 
-echo "==================================="
-echo "Fix #6: Connection State Context"
-echo "Quick Verification Test"
-echo "==================================="
-echo ""
+SERVER_URL="${CYRENUS_URL:-http://127.0.0.1:8181}"
+TARGET_IP="${CYRENUS_TARGET_IP:-127.0.0.1}"
+USERNAME="${CYRENUS_USERNAME:-admin}"
+PASSWORD="${CYRENUS_PASSWORD:-secret}"
 
-# Configuration
-SERVER_URL="http://192.168.0.106:8181"
-TARGET_IP="192.168.0.106"
-
-# Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Test 1: Check if server is running
+echo "==================================="
+echo "Connection State Context Verification"
+echo "Server: $SERVER_URL | Target: $TARGET_IP"
+echo "==================================="
+
 echo -n "Test 1: Server Health Check... "
-if curl -s $SERVER_URL/api/v1/system/health | jq -e '.status == "healthy"' &>/dev/null; then
-  echo -e "${GREEN}✅ PASS${NC}"
+if curl -fsS "$SERVER_URL/api/v1/system/health" | grep -q '"healthy"'; then
+    echo -e "${GREEN}PASS${NC}"
 else
-  echo -e "${RED}❌ FAIL - Server not responding${NC}"
-  exit 1
+    echo -e "${RED}FAIL - Server not responding${NC}"
+    exit 1
 fi
 
-# Test 2: Clear previous attacks (if any)
-echo -n "Test 2: Baseline - Checking initial state... "
-INITIAL_ATTACKS=$(curl -s $SERVER_URL/api/v1/attacks 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
-echo -e "${YELLOW}Found $INITIAL_ATTACKS existing attacks${NC}"
-
-# Test 3: Generate SHORT burst traffic (should trigger - NEW flow)
-echo -n "Test 3: New Flow Detection (strict threshold)... "
-echo "  Sending high-rate UDP burst for 2 seconds..."
-timeout 2 hping3 --udp -p 80 --flood $TARGET_IP &>/dev/null &
-PID=$!
-sleep 3
-kill $PID 2>/dev/null || true
-
-# Wait for processing
-sleep 2
-
-NEW_ATTACKS=$(curl -s $SERVER_URL/api/v1/attacks 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
-if [ "$NEW_ATTACKS" -gt "$INITIAL_ATTACKS" ]; then
-  echo -e "  ${GREEN}✅ PASS - New flow triggered attack (strict threshold working)${NC}"
-else
-  echo -e "  ${YELLOW}⚠️  INCONCLUSIVE - May need higher traffic rate${NC}"
+LOGIN_RESPONSE=$(curl -fsS -X POST "$SERVER_URL/api/v1/auth/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}")
+TOKEN=$(python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))' <<< "$LOGIN_RESPONSE")
+if [ -z "$TOKEN" ]; then
+    echo -e "${RED}FAIL - Authentication failed${NC}"
+    exit 1
 fi
 
-# Test 4: Generate SUSTAINED traffic to establish flow
-echo -n "Test 4: Established Flow (lenient threshold)... "
-echo "  Sending moderate UDP traffic for 10 seconds to establish flow..."
+auth_get() {
+    curl -fsS -H "Authorization: Bearer $TOKEN" "$SERVER_URL$1"
+}
 
-# Lower rate to stay under strict threshold initially
-hping3 --udp -p 8080 -i u10000 $TARGET_IP &>/dev/null &
-HPING_PID=$!
+INITIAL_ATTACKS=$(auth_get "/api/v1/attacks" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("total", len(d)) if isinstance(d,dict) else len(d))' || echo 0)
+echo "Test 2: Baseline attacks count = $INITIAL_ATTACKS"
 
-echo "  Waiting 7 seconds for flow to establish (>5s threshold)..."
-sleep 7
-
-# Continue for another 5 seconds
-echo "  Flow should now be ESTABLISHED - continuing traffic..."
-sleep 5
-
-kill $HPING_PID 2>/dev/null || true
-
-# Check if new attacks were added during established phase
-sleep 2
-FINAL_ATTACKS=$(curl -s $SERVER_URL/api/v1/attacks 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
-
-EST_ATTACKS=$((FINAL_ATTACKS - NEW_ATTACKS))
-if [ "$EST_ATTACKS" -eq 0 ]; then
-  echo -e "  ${GREEN}✅ PASS - Established flow NOT flagged (lenient threshold working)${NC}"
+if command -v hping3 >/dev/null 2>&1; then
+    echo "Test 3: Sending short UDP flood burst (2s)..."
+    timeout 2 hping3 --udp -p 80 --flood "$TARGET_IP" >/dev/null 2>&1 || true
+    sleep 2
+    NEW_ATTACKS=$(auth_get "/api/v1/attacks" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("total", len(d)) if isinstance(d,dict) else len(d))' || echo 0)
+    if [ "$NEW_ATTACKS" -gt "$INITIAL_ATTACKS" ]; then
+        echo -e "  ${GREEN}PASS - New flow triggered attack detection${NC}"
+    else
+        echo -e "  ${YELLOW}WARN - Rate may not have exceeded threshold (${INITIAL_ATTACKS} -> ${NEW_ATTACKS})${NC}"
+    fi
 else
-  echo -e "  ${YELLOW}⚠️  WARNING - Flow may have been flagged ($EST_ATTACKS new attacks)${NC}"
-  echo "  (This could mean traffic exceeded even the 10× threshold)"
+    echo -e "${YELLOW}Skipped flood injection (hping3 not installed); use tests/security_benchmark.sh for full Scapy netns benchmark.${NC}"
 fi
 
-# Test 5: Check traffic tracking
-echo -n "Test 5: Flow Tracking... "
-FLOWS=$(curl -s $SERVER_URL/api/v1/traffic 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
-if [ "$FLOWS" -gt 0 ]; then
-  echo -e "${GREEN}✅ PASS - Tracking $FLOWS active flows${NC}"
-else
-  echo -e "${YELLOW}⚠️  No active flows (may have timed out)${NC}"
-fi
-
-# Summary
-echo ""
-echo "==================================="
-echo "Test Summary"
-echo "==================================="
-echo "Total Attacks Detected: $FINAL_ATTACKS"
-echo "Active Flows Tracked: $FLOWS"
-echo ""
-echo -e "${YELLOW}Note: For full verification, run manual YouTube test${NC}"
-echo "1. Visit: $SERVER_URL"
-echo "2. Watch YouTube 4K for 10 minutes"
-echo "3. Check Attacks tab - should remain at $FINAL_ATTACKS"
-echo ""
-echo "Kernel logs: sudo dmesg | grep -i flood | tail -20"
+FLOWS=$(auth_get "/api/v1/traffic/stats" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))' || echo 0)
+echo "Active flows tracked: $FLOWS"

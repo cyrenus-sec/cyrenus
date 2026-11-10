@@ -34,6 +34,12 @@
 #define ATK_ID_GEOIP_BLOCK      6
 #define ATK_ID_GLOBAL_SYN_FLOOD 7
 #define ATK_ID_GLOBAL_UDP_FLOOD 8
+#define ATK_ID_UDP_AMP          9
+#define ATK_ID_ACK_FLOOD        10
+#define ATK_ID_RST_FLOOD        11
+#define ATK_ID_SYNACK_FLOOD     12
+#define ATK_ID_MALFORMED_PKT    13
+#define ATK_ID_MAX              13
 
 // Drop reason IDs for per-vector telemetry
 #define DROP_REASON_NONE      0
@@ -45,6 +51,10 @@
 #define DROP_REASON_RULE      6
 #define DROP_REASON_GEO       7
 #define DROP_REASON_AUTOBLOCK 8
+#define DROP_REASON_AMP       9
+#define DROP_REASON_ACK       10
+#define DROP_REASON_RST       11
+#define DROP_REASON_MALFORMED 12
 
 // Balanced default detection and mitigation thresholds
 #define DEFAULT_SYN_FLOOD_RATE      500
@@ -57,6 +67,17 @@
 #define DEFAULT_GLOBAL_SYN_RATE     5000
 #define DEFAULT_GLOBAL_UDP_RATE     25000
 #define DEFAULT_MAX_DNS_RESP_SIZE   2048
+#define DEFAULT_RST_FLOOD_RATE      500
+#define DEFAULT_ACK_FLOOD_RATE      2500
+#define DEFAULT_SYNACK_FLOOD_RATE   1000
+
+// Unified dual-stack IPv4/IPv6 address representation (16 bytes, network order).
+// IPv4 addresses are stored in ::ffff:a.b.c.d IPv4-mapped IPv6 form:
+// addr[0]=0, addr[1]=0, addr[2]=htonl(0x0000ffff), addr[3]=ipv4_be.
+// All-zero addr[0..3]=0 represents wildcard / global aggregate source.
+struct cyrenus_ip {
+    __u32 addr[4];
+};
 
 #if !defined(__KERNEL__) && !defined(__bpf__)
 struct session {
@@ -79,9 +100,14 @@ struct geoip_key {
     __u32 ip;
 };
 
+struct geoip6_key {
+    __u32 prefixlen;
+    __u8 ip[16];
+};
+
 struct ip_list_key {
     __u32 prefixlen;
-    __u32 ip;
+    struct cyrenus_ip ip;
 };
 
 struct global_stats_t {
@@ -99,19 +125,26 @@ struct global_stats_t {
     __u64 rule_drops;
     __u64 geo_drops;
     __u64 autoblock_drops;
+    __u64 amp_drops;
+    __u64 ack_drops;
+    __u64 rst_drops;
+    __u64 malformed_drops;
 };
 
 struct traffic_info_t {
-    __u32 src_ip;
-    __u32 dst_ip;
+    struct cyrenus_ip src_ip;
+    struct cyrenus_ip dst_ip;
     __u16 src_port;
     __u16 dst_port;
-    __u64 timestamp;
     __u8 direction;
-    __u32 host_ip;
     __u8 proto;
+    __u8 ip_version;
+    __u8 pad;
+    __u64 timestamp;
+    struct cyrenus_ip host_ip;
     __u64 bytes;
     __u32 packets;
+    __u32 pad2;
     __u64 flow_start_time;
     __u64 flow_end_time;
     __u32 fwd_packets;
@@ -142,15 +175,15 @@ struct traffic_info_t {
 };
 
 struct rule_key_t {
-    __u32 ip;
+    struct cyrenus_ip ip;
     __u16 port;
     __u8 proto;
     __u8 pad;
 };
 
 struct flow_key_t {
-    __u32 src_ip;
-    __u32 dst_ip;
+    struct cyrenus_ip src_ip;
+    struct cyrenus_ip dst_ip;
     __u16 src_port;
     __u16 dst_port;
     __u8 proto;
@@ -177,6 +210,10 @@ struct attacks_config_t {
     __u32 global_syn_rate;
     __u32 global_udp_rate;
     __u32 max_dns_response_size;
+    __u32 rst_flood_rate;
+    __u32 ack_flood_rate;
+    __u32 synack_flood_rate;
+    __u32 pad;
 };
 
 struct auto_block_val {
@@ -193,7 +230,7 @@ struct auto_block_val {
 };
 
 struct active_attack_key {
-    __u32 src_ip;
+    struct cyrenus_ip src_ip;
     __u8 attack_id;
     __u8 pad[3];
 };
@@ -222,14 +259,15 @@ struct global_rate_state {
 
 struct attack_info {
     __u64 timestamp;
-    __u32 src_ip;
+    struct cyrenus_ip src_ip;
     __u32 packets;
-    __u64 bytes;
     __u32 peak_pps;
+    __u64 bytes;
     __u8 protocol;
     __u8 attack_id;
     __u8 blocked;
     __u8 padding;
+    __u32 pad2;
     char attack_type[ATTACK_TYPE_MAX_LEN];
 };
 

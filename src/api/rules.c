@@ -2,6 +2,7 @@
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <arpa/inet.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -9,6 +10,25 @@
 #include "../../include/attack_info.h"
 #include "../../include/database.h"
 #include "../../include/common.h"
+
+static void url_decode_str(const char *src, char *dst, size_t dst_len) {
+    if (!dst || dst_len == 0) return;
+    dst[0] = '\0';
+    if (!src) return;
+    size_t i = 0;
+    while (*src && i + 1 < dst_len) {
+        if (src[0] == '%' &&
+            isxdigit((unsigned char)src[1]) &&
+            isxdigit((unsigned char)src[2])) {
+            char hex[3] = { src[1], src[2], '\0' };
+            dst[i++] = (char)strtol(hex, NULL, 16);
+            src += 3;
+        } else {
+            dst[i++] = *src++;
+        }
+    }
+    dst[i] = '\0';
+}
 
 static int parse_proto_str(const char *proto, uint8_t *out) {
     if (!proto || proto[0] == '\0') {
@@ -31,6 +51,10 @@ static int parse_proto_str(const char *proto, uint8_t *out) {
         *out = IPPROTO_ICMP;
         return 0;
     }
+    if (strcasecmp(proto, "icmpv6") == 0 || strcasecmp(proto, "icmp6") == 0 || strcmp(proto, "58") == 0) {
+        *out = IPPROTO_ICMPV6;
+        return 0;
+    }
     return -1;
 }
 
@@ -48,7 +72,7 @@ enum MHD_Result api_rules_list(struct MHD_Connection *connection,
     }
 
     for (int i = 0; i < db_count; i++) {
-        char rule_key[64];
+        char rule_key[80];
         snprintf(rule_key, sizeof(rule_key), "%s_%u_%u",
                  db_rules[i].ip_address, db_rules[i].port_start, db_rules[i].protocol);
 
@@ -75,13 +99,15 @@ enum MHD_Result api_rules_list(struct MHD_Connection *connection,
 
         while (bpf_map_get_next_key(fds->rules_fd, cur_key, &next_key) == 0) {
             if (bpf_map_lookup_elem(fds->rules_fd, &next_key, &rule) == 0) {
-                char ip_str[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &next_key.ip, ip_str, sizeof(ip_str));
+                char ip_str[INET6_ADDRSTRLEN] = {0};
+                cyrenus_ip_to_str(&next_key.ip, ip_str, sizeof(ip_str));
                 uint16_t port_host = ntohs(next_key.port);
 
                 int exists_in_db = 0;
                 for (int i = 0; i < db_count; i++) {
-                    if (strcmp(db_rules[i].ip_address, ip_str) == 0 &&
+                    struct cyrenus_ip db_ip = {0};
+                    if (cyrenus_str_to_ip(db_rules[i].ip_address, &db_ip, NULL) == 0 &&
+                        cyrenus_ip_equals(&db_ip, &next_key.ip) &&
                         db_rules[i].port_start == port_host &&
                         db_rules[i].protocol == next_key.proto) {
                         exists_in_db = 1;
@@ -90,7 +116,7 @@ enum MHD_Result api_rules_list(struct MHD_Connection *connection,
                 }
 
                 if (!exists_in_db) {
-                    char rule_key[64];
+                    char rule_key[80];
                     snprintf(rule_key, sizeof(rule_key), "%s_%u_%u", ip_str, port_host, next_key.proto);
 
                     json_object *j_rule = json_object_new_object();
@@ -144,10 +170,13 @@ enum MHD_Result api_rules_create(struct MHD_Connection *connection,
     if (json_object_object_get_ex(json_rule, "ip", &j_ip)) {
         ip_str = json_object_get_string(j_ip);
     }
-    if (!ip_str || inet_pton(AF_INET, ip_str, &key.ip) != 1) {
+    if (!ip_str || cyrenus_str_to_ip(ip_str, &key.ip, NULL) != 0) {
         json_object_put(json_rule);
-        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid or missing IPv4 address");
+        return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid or missing IPv4/IPv6 address");
     }
+
+    char canonical_ip[46] = {0};
+    cyrenus_ip_to_str(&key.ip, canonical_ip, sizeof(canonical_ip));
 
     int port = 0;
     if (json_object_object_get_ex(json_rule, "port", &j_port)) {
@@ -166,7 +195,7 @@ enum MHD_Result api_rules_create(struct MHD_Connection *connection,
         const char *proto_s = json_object_get_string(j_proto);
         if (parse_proto_str(proto_s, &proto_val) != 0) {
             json_object_put(json_rule);
-            return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid protocol (use tcp, udp, icmp, or all)");
+            return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid protocol (use tcp, udp, icmp, icmpv6, or all)");
         }
     }
     key.proto = proto_val;
@@ -198,7 +227,7 @@ enum MHD_Result api_rules_create(struct MHD_Connection *connection,
             json_object_put(json_rule);
             return api_send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Failed to update BPF rules map");
         }
-        // If allowing all traffic for this IP, lift any active auto-block immediately
+        // If allowing traffic for this IP, lift any active auto-block immediately
         if (rule.action == ACTION_PASS && fds->auto_block_fd >= 0) {
             bpf_map_delete_elem(fds->auto_block_fd, &key.ip);
         }
@@ -206,7 +235,7 @@ enum MHD_Result api_rules_create(struct MHD_Connection *connection,
 
     if (ctx && ctx->db && ctx->db->is_open) {
         struct rule_record rec = {0};
-        snprintf(rec.ip_address, sizeof(rec.ip_address), "%s", ip_str);
+        snprintf(rec.ip_address, sizeof(rec.ip_address), "%s", canonical_ip);
         rec.port_start = (uint16_t)port;
         rec.port_end = (uint16_t)port;
         rec.protocol = proto_val;
@@ -225,51 +254,71 @@ enum MHD_Result api_rules_delete(struct MHD_Connection *connection,
                                  struct api_context *ctx,
                                  const char *id_str) {
     struct map_fds *fds = ctx ? ctx->fds : NULL;
-    char ip_str[INET_ADDRSTRLEN] = {0};
-    int port = 0, proto = 0;
+    char decoded[128] = {0};
+    url_decode_str(id_str, decoded, sizeof(decoded));
 
-    if (!id_str || id_str[0] == '\0') {
+    if (decoded[0] == '\0') {
         return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid rule ID");
     }
 
-    // Support both IP_PORT_PROTO tuple ("1.2.3.4_80_6") and numeric DB ID
-    if (sscanf(id_str, "%15[^_]_%d_%d", ip_str, &port, &proto) == 3) {
-        if (port < 0 || port > 65535 || proto < 0 || proto > 255) {
-            return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid rule tuple values");
-        }
+    // Parse "<ip>_<port>_<proto>" from right using strrchr so IPv6 colons never truncate
+    char *last_us = strrchr(decoded, '_');
+    if (last_us) {
+        *last_us = '\0';
+        char *prev_us = strrchr(decoded, '_');
+        if (prev_us) {
+            *prev_us = '\0';
+            const char *ip_part = decoded;
+            const char *port_part = prev_us + 1;
+            const char *proto_part = last_us + 1;
 
-        struct rule_key_t key = {0};
-        if (inet_pton(AF_INET, ip_str, &key.ip) != 1) {
-            return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid IP address in rule ID");
-        }
-        key.port = htons((uint16_t)port);
-        key.proto = (uint8_t)proto;
+            char *end1 = NULL, *end2 = NULL;
+            long port = strtol(port_part, &end1, 10);
+            long proto = strtol(proto_part, &end2, 10);
 
-        int deleted = 0;
-        if (fds && fds->rules_fd >= 0) {
-            if (bpf_map_delete_elem(fds->rules_fd, &key) == 0) {
-                deleted = 1;
+            if (port_part[0] && proto_part[0] &&
+                end1 && *end1 == '\0' && end2 && *end2 == '\0' &&
+                port >= 0 && port <= 65535 && proto >= 0 && proto <= 255) {
+
+                struct rule_key_t key = {0};
+                if (cyrenus_str_to_ip(ip_part, &key.ip, NULL) != 0) {
+                    return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid IP address in rule ID");
+                }
+                char canonical_ip[46] = {0};
+                cyrenus_ip_to_str(&key.ip, canonical_ip, sizeof(canonical_ip));
+
+                key.port = htons((uint16_t)port);
+                key.proto = (uint8_t)proto;
+
+                int deleted = 0;
+                if (fds && fds->rules_fd >= 0) {
+                    if (bpf_map_delete_elem(fds->rules_fd, &key) == 0) {
+                        deleted = 1;
+                    }
+                }
+                if (ctx && ctx->db && ctx->db->is_open) {
+                    if (database_delete_rule_by_tuple(ctx->db, canonical_ip, (uint16_t)port, (uint8_t)proto) == 0 ||
+                        database_delete_rule_by_tuple(ctx->db, ip_part, (uint16_t)port, (uint8_t)proto) == 0) {
+                        deleted = 1;
+                    }
+                }
+
+                if (!deleted) {
+                    return api_send_error(connection, MHD_HTTP_NOT_FOUND, "Rule not found");
+                }
+                return api_send_json(connection, MHD_HTTP_OK, "{\"status\":\"Rule deleted\"}");
             }
         }
-        if (ctx && ctx->db && ctx->db->is_open) {
-            if (database_delete_rule_by_tuple(ctx->db, ip_str, (uint16_t)port, (uint8_t)proto) == 0) {
-                deleted = 1;
-            }
-        }
-
-        if (!deleted) {
-            return api_send_error(connection, MHD_HTTP_NOT_FOUND, "Rule not found");
-        }
-        return api_send_json(connection, MHD_HTTP_OK, "{\"status\":\"Rule deleted\"}");
     }
 
     // Numeric rule ID fallback
-    int db_id = atoi(id_str);
+    url_decode_str(id_str, decoded, sizeof(decoded));
+    int db_id = atoi(decoded);
     if (db_id > 0 && ctx && ctx->db && ctx->db->is_open) {
         struct rule_record rec;
         if (database_get_rule(ctx->db, db_id, &rec) == 0) {
             struct rule_key_t key = {0};
-            if (fds && fds->rules_fd >= 0 && inet_pton(AF_INET, rec.ip_address, &key.ip) == 1) {
+            if (fds && fds->rules_fd >= 0 && cyrenus_str_to_ip(rec.ip_address, &key.ip, NULL) == 0) {
                 key.port = htons(rec.port_start);
                 key.proto = rec.protocol;
                 bpf_map_delete_elem(fds->rules_fd, &key);

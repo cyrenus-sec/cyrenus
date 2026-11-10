@@ -1,3 +1,4 @@
+#define _DEFAULT_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -10,6 +11,7 @@
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
+#include <ifaddrs.h>
 #include <pthread.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -38,32 +40,49 @@ static struct runtime_config config;
 static struct database db;
 struct database *g_db = NULL; // Global database for security API
 
-uint32_t get_interface_ip(const char *interface_name) {
-    int fd;
-    struct ifreq ifr;
-    uint32_t ip_addr = 0;
+#define MAX_HOST_IPS 32
 
-    fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd == -1) {
-        perror("Cannot create socket");
-        return 0;
+static int collect_interface_ips(const char *interface_name,
+                                 struct cyrenus_ip *out, int max_ips, int *count_out) {
+    if (!interface_name || !out || max_ips <= 0 || !count_out) return -1;
+    *count_out = 0;
+
+    struct ifaddrs *ifaddr = NULL;
+    if (getifaddrs(&ifaddr) != 0) {
+        perror("getifaddrs");
+        return -1;
     }
 
-    memset(&ifr, 0, sizeof(ifr));
-    ifr.ifr_addr.sa_family = AF_INET;
-    strncpy(ifr.ifr_name, interface_name, IFNAMSIZ - 1);
-    ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+    for (struct ifaddrs *ifa = ifaddr; ifa != NULL && *count_out < max_ips; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr || !ifa->ifa_name) continue;
+        if (strcmp(ifa->ifa_name, interface_name) != 0) continue;
 
-    if (ioctl(fd, SIOCGIFADDR, &ifr) == -1) {
-        perror("ioctl error");
-        close(fd);
-        return 0;
+        struct cyrenus_ip cand = {0};
+        if (ifa->ifa_addr->sa_family == AF_INET) {
+            struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
+            cyrenus_ip_from_v4(&cand, sin->sin_addr.s_addr);
+        } else if (ifa->ifa_addr->sa_family == AF_INET6) {
+            struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
+            cyrenus_ip_from_v6(&cand, &sin6->sin6_addr);
+        } else {
+            continue;
+        }
+
+        // Deduplicate
+        int dup = 0;
+        for (int i = 0; i < *count_out; i++) {
+            if (cyrenus_ip_equals(&out[i], &cand)) {
+                dup = 1;
+                break;
+            }
+        }
+        if (!dup) {
+            out[(*count_out)++] = cand;
+        }
     }
 
-    close(fd);
-
-    ip_addr = ((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr.s_addr;
-    return ip_addr;
+    freeifaddrs(ifaddr);
+    return (*count_out > 0) ? 0 : -1;
 }
 
 // Signal handler to catch termination signals
@@ -86,9 +105,11 @@ static void init_invalid_map_fds(struct map_fds *fds) {
     fds->ip_whitelist_fd = -1;
     fds->ip_blacklist_fd = -1;
     fds->geoip_map_fd = -1;
+    fds->geoip6_map_fd = -1;
     fds->blocked_countries_fd = -1;
     fds->global_stats_fd = -1;
     fds->config_map_fd = -1;
+    fds->host_ips_fd = -1;
 }
 
 static void load_u32_setting(struct database *d, const char *key, uint32_t *target,
@@ -123,18 +144,25 @@ static void load_persisted_settings(struct database *d, struct runtime_config *r
     load_u32_setting(d, "global_syn_rate", &rc->global_syn_rate, 0, 50000000);
     load_u32_setting(d, "global_udp_rate", &rc->global_udp_rate, 0, 50000000);
     load_u32_setting(d, "max_dns_response_size", &rc->max_dns_response_size, 64, 65535);
+    load_u32_setting(d, "rst_flood_rate", &rc->rst_flood_rate, 1, 10000000);
+    load_u32_setting(d, "ack_flood_rate", &rc->ack_flood_rate, 1, 10000000);
+    load_u32_setting(d, "synack_flood_rate", &rc->synack_flood_rate, 1, 10000000);
 }
 
 static void sync_ip_list_to_bpf(const struct ip_list_record *entries, int count, int map_fd) {
     if (!entries || count <= 0 || map_fd < 0) return;
     for (int i = 0; i < count; i++) {
-        struct in_addr addr = {0};
-        if (inet_pton(AF_INET, entries[i].ip_address, &addr) != 1) continue;
-        uint8_t cidr = entries[i].cidr_range <= 32 ? entries[i].cidr_range : 32;
-        uint32_t mask_host = (cidr == 0) ? 0U : (~0U << (32 - cidr));
+        char canonical_ip[46] = {0};
+        uint8_t cidr = 0;
+        struct cyrenus_ip masked = {0};
+        int af = AF_INET;
+        if (cyrenus_parse_cidr(entries[i].ip_address, entries[i].cidr_range,
+                               canonical_ip, &cidr, &masked, &af) != 0) {
+            continue;
+        }
         struct ip_list_key key = {
-            .prefixlen = cidr,
-            .ip = htonl(ntohl(addr.s_addr) & mask_host)
+            .prefixlen = cyrenus_ip_to_lpm_prefix(af, cidr),
+            .ip = masked
         };
         uint8_t val = 1;
         bpf_map_update_elem(map_fd, &key, &val, BPF_ANY);
@@ -152,10 +180,15 @@ static void sync_persisted_policies_to_bpf(struct database *d, const struct map_
             int loaded = 0;
             for (int i = 0; i < rcount; i++) {
                 if (!rules[i].enabled) continue;
-                struct in_addr addr = {0};
-                if (inet_pton(AF_INET, rules[i].ip_address, &addr) != 1) continue;
+                struct cyrenus_ip rule_ip = {0};
+                if (strcmp(rules[i].ip_address, "0.0.0.0") != 0 &&
+                    strcmp(rules[i].ip_address, "::") != 0) {
+                    if (cyrenus_str_to_ip(rules[i].ip_address, &rule_ip, NULL) != 0) {
+                        continue;
+                    }
+                }
                 struct rule_key_t key = {
-                    .ip = addr.s_addr,
+                    .ip = rule_ip,
                     .port = htons(rules[i].port_start),
                     .proto = rules[i].protocol
                 };
@@ -222,15 +255,15 @@ struct monitor_ctx {
 
 #define ALERT_TRACK_CAP 256
 struct alert_track_entry {
-    uint32_t src_ip;
+    struct cyrenus_ip src_ip;
     uint8_t attack_id;
     uint64_t last_seen_ns;
 };
 
 static int should_emit_attack_alert(struct alert_track_entry *track, int *track_count,
-                                    uint32_t src_ip, uint8_t attack_id, uint64_t last_seen_ns) {
+                                    const struct cyrenus_ip *src_ip, uint8_t attack_id, uint64_t last_seen_ns) {
     for (int i = 0; i < *track_count; i++) {
-        if (track[i].src_ip == src_ip && track[i].attack_id == attack_id) {
+        if (cyrenus_ip_equals(&track[i].src_ip, src_ip) && track[i].attack_id == attack_id) {
             int restart = (last_seen_ns > track[i].last_seen_ns &&
                            (last_seen_ns - track[i].last_seen_ns) > 30000000000ULL);
             track[i].last_seen_ns = last_seen_ns;
@@ -249,7 +282,7 @@ static int should_emit_attack_alert(struct alert_track_entry *track, int *track_
             }
         }
     }
-    track[slot].src_ip = src_ip;
+    track[slot].src_ip = *src_ip;
     track[slot].attack_id = attack_id;
     track[slot].last_seen_ns = last_seen_ns;
     return 1;
@@ -355,10 +388,10 @@ void *monitor_thread(void *arg) {
         // Count active auto-blocks and purge long-expired entries (>60s past expiry)
         int active_blocks = 0;
         if (ctx->fds.auto_block_fd >= 0) {
-            uint32_t k = 0, nk = 0;
+            struct cyrenus_ip k = {0}, nk = {0};
             void *cur = NULL;
             struct auto_block_val val;
-            uint32_t expired_ips[64];
+            struct cyrenus_ip expired_ips[64];
             int expired_n = 0;
 
             while (bpf_map_get_next_key(ctx->fds.auto_block_fd, cur, &nk) == 0) {
@@ -399,7 +432,7 @@ void *monitor_thread(void *arg) {
                 // Only sync active or recently transitioned attacks to SQLite
                 if (age_ns <= 35000000000ULL) {
                     bool currently_blocked = (av->blocked != 0);
-                    if (ctx->fds.auto_block_fd >= 0 && ak->src_ip != 0) {
+                    if (ctx->fds.auto_block_fd >= 0 && !cyrenus_ip_is_zero(&ak->src_ip)) {
                         struct auto_block_val ab;
                         if (bpf_map_lookup_elem(ctx->fds.auto_block_fd, &ak->src_ip, &ab) == 0 &&
                             now_ns < ab.blocked_until_ns) {
@@ -412,10 +445,10 @@ void *monitor_thread(void *arg) {
                     if (last_unix > now_unix) last_unix = now_unix;
                     rec.timestamp = (int64_t)last_unix;
 
-                    if (ak->src_ip == 0) {
+                    if (cyrenus_ip_is_zero(&ak->src_ip)) {
                         snprintf(rec.src_ip, sizeof(rec.src_ip), "0.0.0.0");
                     } else {
-                        inet_ntop(AF_INET, &ak->src_ip, rec.src_ip, sizeof(rec.src_ip));
+                        cyrenus_ip_to_str(&ak->src_ip, rec.src_ip, sizeof(rec.src_ip));
                     }
 
                     snprintf(rec.attack_type, sizeof(rec.attack_type), "%s", get_attack_name_by_id(ak->attack_id));
@@ -446,7 +479,7 @@ void *monitor_thread(void *arg) {
 
                     if (is_active &&
                         should_emit_attack_alert(alert_track, &alert_track_count,
-                                                 ak->src_ip, ak->attack_id, av->last_seen_ns)) {
+                                                 &ak->src_ip, ak->attack_id, av->last_seen_ns)) {
                         broadcast_attack_alert(&rec);
                     }
                 }
@@ -559,18 +592,22 @@ int main(int argc, char **argv) {
     }
 
     // 3. Network Setup
-    uint32_t host_ip = get_interface_ip(config.interface);
-    if (host_ip == 0) {
+    struct cyrenus_ip host_ips[MAX_HOST_IPS] = {0};
+    int host_ip_count = 0;
+    if (collect_interface_ips(config.interface, host_ips, MAX_HOST_IPS, &host_ip_count) != 0) {
         if (config.dry_run) {
             fprintf(stderr, "Warning: Failed to get IP for interface %s, using 127.0.0.1 in dry-run mode\n", config.interface);
-            host_ip = htonl(INADDR_LOOPBACK);
+            cyrenus_ip_from_v4(&host_ips[0], htonl(INADDR_LOOPBACK));
+            host_ip_count = 1;
         } else {
             fprintf(stderr, "Failed to get IP address for interface %s\n", config.interface);
             database_close(&db);
             return EXIT_FAILURE;
         }
     }
-    printf("Detected host IP: %s\n", inet_ntoa((struct in_addr){host_ip}));
+    char primary_ip_str[64] = {0};
+    cyrenus_ip_to_str(&host_ips[0], primary_ip_str, sizeof(primary_ip_str));
+    printf("Detected %d host IP(s) on %s (primary: %s)\n", host_ip_count, config.interface, primary_ip_str);
 
     // 4. Load eBPF Program
     struct map_fds fds;
@@ -583,16 +620,17 @@ int main(int argc, char **argv) {
         const char *obj_path = (access("/usr/local/lib/cyrenus_xdp_prog.o", R_OK) == 0)
                                    ? "/usr/local/lib/cyrenus_xdp_prog.o"
                                    : "./build/xdp_prog.o";
-        if (load_bpf_program(obj_path, config.interface, host_ip, &initial_cfg, &fds,
+        if (load_bpf_program(obj_path, config.interface, host_ips, host_ip_count,
+                             &initial_cfg, &fds,
                              config.xdp_mode, sizeof(config.xdp_mode)) != 0) {
             fprintf(stderr, "Failed to load BPF program\n");
             database_close(&db);
             return EXIT_FAILURE;
         }
 
-        // Populate GeoIP BPF map (if configured)
+        // Populate GeoIP BPF maps (IPv4 and IPv6, if configured)
         if (!config.no_geoip && config.geoip_db_path[0] != '\0') {
-            geoip_populate_bpf_map(fds.geoip_map_fd);
+            geoip_populate_bpf_maps(fds.geoip_map_fd, fds.geoip6_map_fd);
         }
 
         // Sync persisted firewall rules, IP lists, and GeoIP rules into BPF maps
@@ -614,7 +652,7 @@ int main(int argc, char **argv) {
     // 6. Start WebSocket Server
     int ws_started = 0;
     pthread_t ws_thread_id;
-    if (ws_server_init(&config) == 0) {
+    if (ws_server_init(&config, &db) == 0) {
         if (pthread_create(&ws_thread_id, NULL, ws_server_thread, NULL) == 0) {
             ws_started = 1;
         } else {
@@ -661,7 +699,8 @@ int main(int argc, char **argv) {
 
     // 9. Initialize and Start Tetragon Event Monitor
     printf("Initializing Tetragon event monitor...\n");
-    const char *tetragon_log_path = "/var/log/tetragon/tetragon.log";
+    const char *env_tlog = getenv("CYRENUS_TETRAGON_LOG");
+    const char *tetragon_log_path = (env_tlog && env_tlog[0]) ? env_tlog : "/var/log/tetragon/tetragon.log";
     if (tetragon_init(tetragon_log_path) == 0) {
         printf("Tetragon monitor initialized for: %s\n", tetragon_log_path);
         if (tetragon_start_monitor() == 0) {
@@ -678,8 +717,9 @@ int main(int argc, char **argv) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    printf("Cyrenus is running on %s:%d. Press Ctrl+C to stop.\n",
-           inet_ntoa((struct in_addr){host_ip}), config.http_port);
+    printf("Cyrenus is running on %s:%d (interface IP %s). Press Ctrl+C to stop.\n",
+           config.bind_address[0] ? config.bind_address : "0.0.0.0",
+           config.http_port, primary_ip_str);
 
     // Main loop
     while (running) {

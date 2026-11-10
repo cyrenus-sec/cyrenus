@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include "../../include/api_handlers.h"
@@ -26,10 +27,25 @@ enum MHD_Result api_geoip_lookup(struct MHD_Connection *connection,
         return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Missing IP");
     }
 
+    char decoded[80] = {0};
+    size_t j = 0;
+    for (size_t i = 0; ip_str[i] && j + 1 < sizeof(decoded); i++) {
+        if (ip_str[i] == '%' &&
+            isxdigit((unsigned char)ip_str[i + 1]) &&
+            isxdigit((unsigned char)ip_str[i + 2])) {
+            char hex[3] = { ip_str[i + 1], ip_str[i + 2], '\0' };
+            decoded[j++] = (char)strtol(hex, NULL, 16);
+            i += 2;
+        } else {
+            decoded[j++] = ip_str[i];
+        }
+    }
+    decoded[j] = '\0';
+
     struct geoip_info info;
-    if (geoip_lookup(ip_str, &info) == 0) {
+    if (geoip_lookup(decoded, &info) == 0) {
         struct json_object *json_info = json_object_new_object();
-        json_object_object_add(json_info, "ip", json_object_new_string(ip_str));
+        json_object_object_add(json_info, "ip", json_object_new_string(decoded));
         json_object_object_add(json_info, "country_code", json_object_new_string(info.country_code));
         json_object_object_add(json_info, "country_name", json_object_new_string(info.country_name));
         json_object_object_add(json_info, "city", json_object_new_string(info.city));

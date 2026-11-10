@@ -1,0 +1,31 @@
+# Cyrenus Production Caddyfile (Automatic HTTPS via Let's Encrypt)
+# Prerequisite in /etc/cyrenus/cyrenus.conf:
+#   bind_address = "127.0.0.1";
+#   trusted_proxy = "127.0.0.1";
+#   cors_origin = "https://cyrenus.example.com";
+
+cyrenus.example.com {
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	@websocket path /ws /ws/*
+	handle @websocket {
+		uri strip_prefix /ws
+		reverse_proxy 127.0.0.1:8182 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8181 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+}
+

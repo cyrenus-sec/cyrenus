@@ -11,6 +11,7 @@ spec:
   # Scoped via matchBinaries so normal system/admin shells are unaffected
   - call: "sys_execve"
     syscall: true
+    message: "CRITICAL RCE detected: web/runtime process spawned interactive shell (blocked via Sigkill)"
     args:
     - index: 0
       type: "string"
@@ -39,27 +40,56 @@ spec:
         - "/usr/bin/dash"
       matchActions:
       - action: Sigkill
-      
-  # 2. Detect reverse shell patterns (bash/nc with network connections)
+
+  # 2. Detect reverse shell patterns (scoped to runtimes, shells, and network/attack utilities)
   - call: "tcp_connect"
     syscall: false
+    message: "WARNING reverse shell or unauthorized outbound tcp_connect detected"
     args:
     - index: 0
       type: "sock"
     selectors:
-    - matchArgs:
+    - matchBinaries:
+      - operator: "In"
+        values:
+        - "/usr/sbin/nginx"
+        - "/usr/sbin/apache2"
+        - "/usr/bin/httpd"
+        - "/usr/sbin/httpd"
+        - "/usr/bin/php-fpm"
+        - "/usr/sbin/php-fpm"
+        - "/usr/bin/php"
+        - "/usr/bin/node"
+        - "/usr/bin/python3"
+        - "/usr/bin/java"
+        - "/usr/bin/ruby"
+        - "/bin/sh"
+        - "/bin/bash"
+        - "/bin/dash"
+        - "/bin/zsh"
+        - "/bin/ash"
+        - "/usr/bin/sh"
+        - "/usr/bin/bash"
+        - "/usr/bin/nc"
+        - "/usr/bin/netcat"
+        - "/usr/bin/ncat"
+        - "/usr/bin/socat"
+      matchArgs:
       - index: 0
         operator: "NotDPort"
         values:
         - "22"
+        - "53"
         - "80"
+        - "123"
         - "443"
       matchActions:
       - action: Post
-      
+
   # 3. Detect execution from temporary directories (fileless attacks)
   - call: "sys_execve"
     syscall: true
+    message: "CRITICAL RCE detected: fileless execution from temporary directory blocked via Sigkill"
     args:
     - index: 0
       type: "string"
@@ -74,10 +104,11 @@ spec:
         - "/run/shm/"
       matchActions:
       - action: Sigkill
-      
+
   # 4. Detect suspicious interpreters spawned by web processes
   - call: "sys_execve"
     syscall: true
+    message: "WARNING suspicious RCE interpreter spawned by web server process"
     args:
     - index: 0
       type: "string"
@@ -108,10 +139,11 @@ spec:
         - "/usr/sbin/apache2"
       matchActions:
       - action: Post
-      
+
   # 5. Detect privilege escalation attempts
   - call: "sys_setuid"
     syscall: true
+    message: "WARNING privilege escalation attempt via setuid(0) detected"
     args:
     - index: 0
       type: "int"
@@ -123,26 +155,32 @@ spec:
         - "0"
       matchActions:
       - action: Post
-      
-  # 6. Monitor common attack tools
+
+  # 6. Monitor common attack/reconnaissance tools
   - call: "sys_execve"
     syscall: true
+    message: "WARNING unauthorized attack or reconnaissance binary execution detected"
     args:
     - index: 0
       type: "string"
     selectors:
     - matchArgs:
       - index: 0
-        operator: "Equal"
+        operator: "In"
         values:
         - "/usr/bin/nmap"
+        - "/usr/bin/sqlmap"
+        - "/usr/bin/ncat"
+        - "/usr/bin/socat"
+        - "/usr/bin/msfconsole"
       matchActions:
       - action: Post
-      
+
   # 7. Detect bind shell attempts (listening on unusual ports)
   - call: "inet_listen"
     syscall: false
     return: false
+    message: "CRITICAL reverse shell / unauthorized bind shell listener detected"
     args:
     - index: 0
       type: "sock"
@@ -156,12 +194,15 @@ spec:
         - "/usr/bin/sh"
         - "/usr/bin/nc"
         - "/usr/bin/netcat"
+        - "/usr/bin/ncat"
+        - "/usr/bin/socat"
       matchActions:
       - action: Post
-      
+
   # 8. Monitor process injection via ptrace
   - call: "sys_ptrace"
     syscall: true
+    message: "WARNING process injection attempt via ptrace PTRACE_ATTACH detected"
     args:
     - index: 0
       type: "int"

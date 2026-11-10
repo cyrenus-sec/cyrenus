@@ -22,6 +22,9 @@ struct runtime_config {
     // Network settings
     char interface[IFNAMSIZ];
     uint16_t http_port;
+    char bind_address[64];
+    char cors_origin[256];
+    char trusted_proxy[64];
     char xdp_mode[32];
     time_t start_time;
 
@@ -63,6 +66,9 @@ struct runtime_config {
     uint32_t global_syn_rate;
     uint32_t global_udp_rate;
     uint32_t max_dns_response_size;
+    uint32_t rst_flood_rate;
+    uint32_t ack_flood_rate;
+    uint32_t synack_flood_rate;
 };
 
 void runtime_config_init(struct runtime_config *rc);
@@ -78,6 +84,9 @@ void runtime_config_print_version(void);
 
 #define ENV_CYRENUS_INTERFACE       "CYRENUS_INTERFACE"
 #define ENV_CYRENUS_HTTP_PORT       "CYRENUS_HTTP_PORT"
+#define ENV_CYRENUS_BIND_ADDRESS    "CYRENUS_BIND_ADDRESS"
+#define ENV_CYRENUS_CORS_ORIGIN     "CYRENUS_CORS_ORIGIN"
+#define ENV_CYRENUS_TRUSTED_PROXY   "CYRENUS_TRUSTED_PROXY"
 #define ENV_CYRENUS_CONFIG          "CYRENUS_CONFIG"
 #define ENV_CYRENUS_DB_PATH         "CYRENUS_DB_PATH"
 #define ENV_CYRENUS_GEOIP_DB        "CYRENUS_GEOIP_DB"

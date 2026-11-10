@@ -305,6 +305,7 @@ spec:
   kprobes:
   - call: "tcp_connect"
     syscall: false
+    message: "Non-database process connecting to database port"
     args:
     - index: 0
       type: "sock"
@@ -322,7 +323,6 @@ spec:
         - "5432"  # PostgreSQL
       matchActions:
       - action: Post
-      message: "Non-database process connecting to database port"
 ```
 
 Save to `/etc/tetragon/policies/database-monitoring.yaml` and restart Tetragon.

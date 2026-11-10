@@ -4,6 +4,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <microhttpd.h>
 #include <time.h>
 
@@ -12,7 +15,6 @@
 #include "../include/web_login.h"
 #include "../include/web_app.h"
 #include "../include/web_styles.h"
-
 
 // Global state
 static struct runtime_config *app_config = NULL;
@@ -25,8 +27,6 @@ struct connection_context {
     char *data;
     size_t size;
 };
-
-// MAX_PAYLOAD_SIZE is defined in http_server.h
 
 // Helper: Reset BPF map FDs to -1
 static void reset_app_fds(void) {
@@ -42,18 +42,19 @@ static void reset_app_fds(void) {
     app_fds.ip_whitelist_fd = -1;
     app_fds.ip_blacklist_fd = -1;
     app_fds.geoip_map_fd = -1;
+    app_fds.geoip6_map_fd = -1;
     app_fds.blocked_countries_fd = -1;
     app_fds.global_stats_fd = -1;
     app_fds.config_map_fd = -1;
+    app_fds.host_ips_fd = -1;
 }
 
 // --- Helper Functions ---
 
 static enum MHD_Result send_response_options(struct MHD_Connection *connection) {
     struct MHD_Response *response = MHD_create_response_from_buffer(0, "", MHD_RESPMEM_PERSISTENT);
-    MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
-    MHD_add_response_header(response, "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    MHD_add_response_header(response, "Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, X-Requested-With");
+    if (!response) return MHD_NO;
+    api_apply_response_headers(connection, response);
 
     enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
     MHD_destroy_response(response);
@@ -61,13 +62,14 @@ static enum MHD_Result send_response_options(struct MHD_Connection *connection) 
 }
 
 static enum MHD_Result send_response_buffer(struct MHD_Connection *connection,
-                                           const void *buffer,
-                                           size_t size,
-                                           const char *content_type) {
-    struct MHD_Response *rs = MHD_create_response_from_buffer(size, (void*)buffer, MHD_RESPMEM_PERSISTENT);
+                                            const void *buffer,
+                                            size_t size,
+                                            const char *content_type) {
+    struct MHD_Response *rs = MHD_create_response_from_buffer(size, (void *)buffer, MHD_RESPMEM_PERSISTENT);
+    if (!rs) return MHD_NO;
     MHD_add_response_header(rs, "Content-Type", content_type);
-    MHD_add_response_header(rs, "Access-Control-Allow-Origin", "*");
     MHD_add_response_header(rs, "Cache-Control", "no-cache");
+    api_apply_response_headers(connection, rs);
 
     enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, rs);
     MHD_destroy_response(rs);
@@ -80,6 +82,7 @@ static enum MHD_Result queue_security_response(struct MHD_Connection *connection
         api_security_last_status(); // Reset thread-local status
         return api_send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Error");
     }
+    api_apply_response_headers(connection, response);
     unsigned int status = (unsigned int)api_security_last_status();
     enum MHD_Result ret = MHD_queue_response(connection, status, response);
     MHD_destroy_response(response);
@@ -92,58 +95,59 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
                           const char *url, const char *method,
                           const char *version, const char *upload_data,
                           size_t *upload_data_size, void **con_cls) {
-                          
+    (void)cls;
+    (void)version;
+
     struct connection_context *ctx = *con_cls;
-    
+
     // 1. New connection
     if (ctx == NULL) {
         ctx = calloc(1, sizeof(struct connection_context));
         if (!ctx) return MHD_NO;
-        
-        // Initialize API context
+
         ctx->api_ctx.config = app_config;
         ctx->api_ctx.db = app_db;
         ctx->api_ctx.fds = &app_fds;
-        
+
         *con_cls = ctx;
         return MHD_YES;
     }
-    
+
     // 2. Receiving data (for POST/PUT)
     if (*upload_data_size > 0) {
         if (ctx->size + *upload_data_size > MAX_PAYLOAD_SIZE) {
-            return MHD_NO; // Too large
+            return MHD_NO;
         }
-        
+
         char *new_data = realloc(ctx->data, ctx->size + *upload_data_size + 1);
         if (!new_data) return MHD_NO;
-        
+
         ctx->data = new_data;
         memcpy(ctx->data + ctx->size, upload_data, *upload_data_size);
         ctx->size += *upload_data_size;
         ctx->data[ctx->size] = '\0';
-        
+
         *upload_data_size = 0;
         return MHD_YES;
     }
-    
+
     // 3. Process request (all data received)
-    
+
     // Handle OPTIONS (CORS preflight)
     if (strcmp(method, "OPTIONS") == 0) {
         return send_response_options(connection);
     }
-    
+
     // --- Public Routes ---
-    
+
     if (strcmp(url, "/api/v1/system/health") == 0) {
         return api_system_health(connection, &ctx->api_ctx);
     }
-    
+
     if (strcmp(url, "/api/v1/auth/login") == 0 && strcmp(method, "POST") == 0) {
         return api_auth_login(connection, &ctx->api_ctx, ctx->data, ctx->size);
     }
-    
+
     // --- Frontend Routing ---
 
     if (strcmp(method, "GET") == 0) {
@@ -165,12 +169,10 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
 
     const char *auth_header = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "Authorization");
 
-    // Check for API verification endpoint
     if (strcmp(url, "/api/v1/auth/verify") == 0 && strcmp(method, "GET") == 0) {
         return api_auth_verify(connection, &ctx->api_ctx, auth_header);
     }
 
-    // Checking auth for protected routes
     int authenticated = 0;
     if (auth_header) {
         struct session_record session;
@@ -181,7 +183,6 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
         }
     }
 
-    // Check X-API-Key if not authenticated yet
     if (!authenticated) {
         const char *api_key = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "X-API-Key");
         if (api_key) {
@@ -300,6 +301,10 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
         return queue_security_response(connection, api_security_stats(connection, method, url));
     }
 
+    if (strcmp(url, "/api/v1/security/correlations") == 0 && strcmp(method, "GET") == 0) {
+        return queue_security_response(connection, api_security_correlations_list(connection, method, url));
+    }
+
     if (strcmp(url, "/api/v1/security/policies") == 0 && strcmp(method, "GET") == 0) {
         return queue_security_response(connection, api_security_policies_list(connection, method, url));
     }
@@ -308,7 +313,6 @@ static enum MHD_Result handle_request(void *cls, struct MHD_Connection *connecti
         const char *policy_name = url + 24;
         const char *deploy_suffix = strstr(policy_name, "/deploy");
 
-        // Check for /deploy suffix
         if (deploy_suffix && strcmp(deploy_suffix, "/deploy") == 0) {
             char name[256];
             size_t name_len = (size_t)(deploy_suffix - policy_name);
@@ -376,25 +380,63 @@ struct MHD_Daemon *start_http_server(
 ) {
     app_config = config;
     app_db = db;
+    api_helpers_set_config(config);
 
     reset_app_fds();
     if (fds) {
         app_fds = *fds;
     }
 
-    struct MHD_Daemon *daemon = MHD_start_daemon(
-        MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
-        app_config->http_port,
-        NULL, NULL,
-        &handle_request, NULL,
-        MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,
-        MHD_OPTION_END
-    );
+    struct MHD_Daemon *daemon = NULL;
+    const char *bind_ip = (app_config && app_config->bind_address[0]) ? app_config->bind_address : "0.0.0.0";
+
+    if (strcmp(bind_ip, "0.0.0.0") == 0) {
+        daemon = MHD_start_daemon(
+            MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+            app_config->http_port,
+            NULL, NULL,
+            &handle_request, NULL,
+            MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,
+            MHD_OPTION_END
+        );
+    } else {
+        struct in_addr v4;
+        struct in6_addr v6;
+        if (inet_pton(AF_INET, bind_ip, &v4) == 1) {
+            struct sockaddr_in sin = {0};
+            sin.sin_family = AF_INET;
+            sin.sin_port = htons(app_config->http_port);
+            sin.sin_addr = v4;
+            daemon = MHD_start_daemon(
+                MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+                app_config->http_port,
+                NULL, NULL,
+                &handle_request, NULL,
+                MHD_OPTION_SOCK_ADDR, (struct sockaddr *)&sin,
+                MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,
+                MHD_OPTION_END
+            );
+        } else if (inet_pton(AF_INET6, bind_ip, &v6) == 1) {
+            struct sockaddr_in6 sin6 = {0};
+            sin6.sin6_family = AF_INET6;
+            sin6.sin6_port = htons(app_config->http_port);
+            sin6.sin6_addr = v6;
+            daemon = MHD_start_daemon(
+                MHD_USE_IPv6 | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+                app_config->http_port,
+                NULL, NULL,
+                &handle_request, NULL,
+                MHD_OPTION_SOCK_ADDR, (struct sockaddr *)&sin6,
+                MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,
+                MHD_OPTION_END
+            );
+        }
+    }
 
     if (daemon) {
-        printf("HTTP server started on port %d\n", app_config->http_port);
+        printf("HTTP server started on %s:%d\n", bind_ip, app_config->http_port);
     } else {
-        fprintf(stderr, "Failed to start HTTP server\n");
+        fprintf(stderr, "Failed to start HTTP server on %s:%d\n", bind_ip, app_config->http_port);
     }
 
     return daemon;

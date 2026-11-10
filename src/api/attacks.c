@@ -27,6 +27,25 @@ static void get_boottime_clock(uint64_t *now_ns_out, time_t *boot_unix_out) {
     }
 }
 
+static void url_decode_str(const char *src, char *dst, size_t dst_len) {
+    if (!dst || dst_len == 0) return;
+    dst[0] = '\0';
+    if (!src) return;
+    size_t i = 0;
+    while (*src && i + 1 < dst_len) {
+        if (src[0] == '%' &&
+            isxdigit((unsigned char)src[1]) &&
+            isxdigit((unsigned char)src[2])) {
+            char hex[3] = { src[1], src[2], '\0' };
+            dst[i++] = (char)strtol(hex, NULL, 16);
+            src += 3;
+        } else {
+            dst[i++] = *src++;
+        }
+    }
+    dst[i] = '\0';
+}
+
 static int ci_contains(const char *haystack, const char *needle) {
     if (!needle || needle[0] == '\0') return 1;
     if (!haystack || haystack[0] == '\0') return 0;
@@ -57,7 +76,7 @@ struct merged_attack {
     int64_t timestamp_unix;
     char time_str[32];
     char src_ip[46];
-    uint32_t src_ip_u32;
+    struct cyrenus_ip src_ip_raw;
     uint8_t attack_id;
     char attack_type[64];
     char protocol[16];
@@ -75,7 +94,6 @@ struct merged_attack {
 static int cmp_merged_desc(const void *a, const void *b) {
     const struct merged_attack *ma = (const struct merged_attack *)a;
     const struct merged_attack *mb = (const struct merged_attack *)b;
-    // Active first if timestamps close, then newest timestamp descending
     if (mb->timestamp_unix != ma->timestamp_unix) {
         return (mb->timestamp_unix > ma->timestamp_unix) ? 1 : -1;
     }
@@ -136,9 +154,8 @@ enum MHD_Result api_attacks_list(struct MHD_Connection *connection,
 
             if (v->packets == 0) continue;
 
-            // Check auto_block_map state
             bool currently_blocked = (v->blocked != 0);
-            if (ctx->fds->auto_block_fd >= 0 && k->src_ip != 0) {
+            if (ctx->fds->auto_block_fd >= 0 && !cyrenus_ip_is_zero(&k->src_ip)) {
                 struct auto_block_val ab;
                 if (bpf_map_lookup_elem(ctx->fds->auto_block_fd, &k->src_ip, &ab) == 0) {
                     if (now_ns < ab.blocked_until_ns) {
@@ -158,15 +175,13 @@ enum MHD_Result api_attacks_list(struct MHD_Connection *connection,
             memset(m, 0, sizeof(*m));
 
             m->db_id = 0;
-            m->src_ip_u32 = k->src_ip;
+            m->src_ip_raw = k->src_ip;
             m->attack_id = k->attack_id;
-            snprintf(m->id_str, sizeof(m->id_str), "ebpf_%u_%u", k->src_ip, k->attack_id);
 
-            if (k->src_ip == 0) {
-                snprintf(m->src_ip, sizeof(m->src_ip), "0.0.0.0");
-            } else {
-                inet_ntop(AF_INET, &k->src_ip, m->src_ip, sizeof(m->src_ip));
-            }
+            char ip_hex[33];
+            cyrenus_ip_to_hex(&k->src_ip, ip_hex);
+            snprintf(m->id_str, sizeof(m->id_str), "ebpf_%s_%u", ip_hex, k->attack_id);
+            cyrenus_ip_to_str(&k->src_ip, m->src_ip, sizeof(m->src_ip));
 
             time_t last_unix = boot_time + (time_t)(v->last_seen_ns / 1000000000ULL);
             if (last_unix > now_unix) last_unix = now_unix;
@@ -401,15 +416,19 @@ enum MHD_Result api_attacks_resolve(struct MHD_Connection *connection,
 
     int updated = 0;
     if (strncmp(id_str, "ebpf_", 5) == 0) {
-        unsigned int ip_u32 = 0, atk_id = 0;
-        if (sscanf(id_str + 5, "%u_%u", &ip_u32, &atk_id) == 2 &&
-            ctx && ctx->fds && ctx->fds->active_attacks_fd >= 0) {
-            struct active_attack_key akey = {
-                .src_ip = (uint32_t)ip_u32,
-                .attack_id = (uint8_t)atk_id
-            };
-            if (bpf_map_delete_elem(ctx->fds->active_attacks_fd, &akey) == 0) {
-                updated = 1;
+        const char *rest = id_str + 5;
+        const char *sep = strrchr(rest, '_');
+        if (sep && (sep - rest) == 32 && ctx && ctx->fds && ctx->fds->active_attacks_fd >= 0) {
+            char hex[33];
+            memcpy(hex, rest, 32);
+            hex[32] = '\0';
+            unsigned int atk_id = (unsigned int)atoi(sep + 1);
+            struct active_attack_key akey = {0};
+            if (atk_id > 0 && atk_id <= ATK_ID_MAX && cyrenus_hex_to_ip(hex, &akey.src_ip) == 0) {
+                akey.attack_id = (uint8_t)atk_id;
+                if (bpf_map_delete_elem(ctx->fds->active_attacks_fd, &akey) == 0) {
+                    updated = 1;
+                }
             }
         }
     } else {
@@ -420,19 +439,19 @@ enum MHD_Result api_attacks_resolve(struct MHD_Connection *connection,
                 if (database_update_attack_status(ctx->db, db_id, "resolved") == 0) {
                     updated = 1;
                 }
-                // Remove corresponding live kernel entry so it starts fresh next time
                 if (ctx->fds && ctx->fds->active_attacks_fd >= 0) {
-                    struct in_addr addr = {0};
-                    if (inet_pton(AF_INET, rec.src_ip, &addr) == 1 || strcmp(rec.src_ip, "0.0.0.0") == 0) {
-                        for (uint8_t aid = 1; aid <= 8; aid++) {
-                            if (strcmp(get_attack_name_by_id(aid), rec.attack_type) == 0) {
-                                struct active_attack_key akey = {
-                                    .src_ip = addr.s_addr,
-                                    .attack_id = aid
-                                };
+                    for (uint8_t aid = 1; aid <= ATK_ID_MAX; aid++) {
+                        if (strcmp(get_attack_name_by_id(aid), rec.attack_type) == 0) {
+                            struct active_attack_key akey = {0};
+                            akey.attack_id = aid;
+                            if ((aid == ATK_ID_GLOBAL_SYN_FLOOD || aid == ATK_ID_GLOBAL_UDP_FLOOD) &&
+                                strcmp(rec.src_ip, "0.0.0.0") == 0) {
+                                memset(&akey.src_ip, 0, sizeof(akey.src_ip));
                                 bpf_map_delete_elem(ctx->fds->active_attacks_fd, &akey);
-                                break;
+                            } else if (cyrenus_str_to_ip(rec.src_ip, &akey.src_ip, NULL) == 0) {
+                                bpf_map_delete_elem(ctx->fds->active_attacks_fd, &akey);
                             }
+                            break;
                         }
                     }
                 }
@@ -457,7 +476,6 @@ enum MHD_Result api_attacks_clear(struct MHD_Connection *connection,
     if (ctx && ctx->fds && ctx->fds->active_attacks_fd >= 0) {
         struct active_attack_key key = {0}, next_key = {0};
         void *cur = NULL;
-        // Collect and delete keys safely
         struct active_attack_key to_del[256];
         int n = 0;
         while (bpf_map_get_next_key(ctx->fds->active_attacks_fd, cur, &next_key) == 0) {
@@ -483,15 +501,15 @@ enum MHD_Result api_blocks_list(struct MHD_Connection *connection,
         time_t boot_time = 0;
         get_boottime_clock(&now_ns, &boot_time);
 
-        uint32_t key = 0, next_key = 0;
+        struct cyrenus_ip key = {0}, next_key = {0};
         void *cur = NULL;
         struct auto_block_val val;
 
         while (bpf_map_get_next_key(ctx->fds->auto_block_fd, cur, &next_key) == 0) {
             if (bpf_map_lookup_elem(ctx->fds->auto_block_fd, &next_key, &val) == 0) {
                 if (now_ns < val.blocked_until_ns) {
-                    char ip_str[INET_ADDRSTRLEN] = {0};
-                    inet_ntop(AF_INET, &next_key, ip_str, sizeof(ip_str));
+                    char ip_str[INET6_ADDRSTRLEN] = {0};
+                    cyrenus_ip_to_str(&next_key, ip_str, sizeof(ip_str));
 
                     uint64_t rem_sec = (val.blocked_until_ns - now_ns) / 1000000000ULL;
                     char first_str[32], last_str[32];
@@ -531,24 +549,26 @@ enum MHD_Result api_blocks_list(struct MHD_Connection *connection,
 enum MHD_Result api_blocks_delete(struct MHD_Connection *connection,
                                   struct api_context *ctx,
                                   const char *ip_str) {
-    struct in_addr addr = {0};
-    if (!ip_str || inet_pton(AF_INET, ip_str, &addr) != 1) {
+    char decoded_ip[80] = {0};
+    url_decode_str(ip_str, decoded_ip, sizeof(decoded_ip));
+
+    struct cyrenus_ip target_ip = {0};
+    if (decoded_ip[0] == '\0' || cyrenus_str_to_ip(decoded_ip, &target_ip, NULL) != 0) {
         return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid IP address");
     }
 
-    uint32_t ip_u32 = addr.s_addr;
     int removed = 0;
 
     if (ctx && ctx->fds) {
-        if (ctx->fds->auto_block_fd >= 0 && bpf_map_delete_elem(ctx->fds->auto_block_fd, &ip_u32) == 0) {
+        if (ctx->fds->auto_block_fd >= 0 && bpf_map_delete_elem(ctx->fds->auto_block_fd, &target_ip) == 0) {
             removed = 1;
         }
-        if (ctx->fds->udp_flood_fd >= 0) bpf_map_delete_elem(ctx->fds->udp_flood_fd, &ip_u32);
-        if (ctx->fds->syn_flood_fd >= 0) bpf_map_delete_elem(ctx->fds->syn_flood_fd, &ip_u32);
-        if (ctx->fds->dns_track_fd >= 0) bpf_map_delete_elem(ctx->fds->dns_track_fd, &ip_u32);
+        if (ctx->fds->udp_flood_fd >= 0) bpf_map_delete_elem(ctx->fds->udp_flood_fd, &target_ip);
+        if (ctx->fds->syn_flood_fd >= 0) bpf_map_delete_elem(ctx->fds->syn_flood_fd, &target_ip);
+        if (ctx->fds->dns_track_fd >= 0) bpf_map_delete_elem(ctx->fds->dns_track_fd, &target_ip);
         if (ctx->fds->active_attacks_fd >= 0) {
-            for (uint8_t aid = 1; aid <= 8; aid++) {
-                struct active_attack_key akey = { .src_ip = ip_u32, .attack_id = aid };
+            for (uint8_t aid = 1; aid <= ATK_ID_MAX; aid++) {
+                struct active_attack_key akey = { .src_ip = target_ip, .attack_id = aid };
                 struct active_attack_val aval;
                 if (bpf_map_lookup_elem(ctx->fds->active_attacks_fd, &akey, &aval) == 0) {
                     aval.blocked = 0;

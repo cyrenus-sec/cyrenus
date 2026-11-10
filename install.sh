@@ -300,10 +300,19 @@ notifications = {
 
 # Attack detection thresholds
 detection = {
-    syn_flood_threshold = 1000;      # packets per second
-    udp_flood_threshold = 5000;      # packets per second
-    dns_amplification_ratio = 10.0;  # response/request size ratio
-    auto_blacklist_threshold = 3;    # number of attacks before auto-block
+    syn_flood_rate = 500;
+    synack_flood_rate = 1000;
+    rst_flood_rate = 500;
+    ack_flood_rate = 2500;
+    udp_flood_rate = 5000;
+    icmp_flood_rate = 100;
+    dns_amp_rate = 200;
+    max_frags = 15;
+    max_dns_response_size = 2048;
+    global_syn_rate = 5000;
+    global_udp_rate = 25000;
+    auto_block_enabled = 1;
+    auto_block_duration_sec = 300;
 };
 EOF
 
@@ -311,8 +320,9 @@ EOF
     echo "$DB_KEY" > /etc/cyrenus/master.key
     chmod 600 /etc/cyrenus/master.key
     
-    # Create data directory
-    mkdir -p /var/lib/cyrenus
+    # Create data & Tetragon integration directories
+    mkdir -p /var/lib/cyrenus /etc/tetragon/policies /var/log/tetragon
+    chmod 755 /etc/tetragon /etc/tetragon/policies /var/log/tetragon
     
     echo -e "${GREEN}✓ Configuration files created${NC}"
 }
@@ -371,7 +381,7 @@ PrivateTmp=true
 NoNewPrivileges=false
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/cyrenus
+ReadWritePaths=/var/lib/cyrenus /etc/tetragon /etc/tetragon/policies
 
 [Install]
 WantedBy=multi-user.target
@@ -485,6 +495,10 @@ print_instructions() {
     echo -e ""
     echo -e "  5. View logs:"
     echo -e "     ${YELLOW}sudo journalctl -u cyrenus -f${NC}"
+    echo -e ""
+    echo -e "  6. Enable HTTPS reverse proxy (recommended for production):"
+    echo -e "     Set ${YELLOW}bind_address = \"127.0.0.1\";${NC} and ${YELLOW}trusted_proxy = \"127.0.0.1\";${NC} in /etc/cyrenus/cyrenus.conf"
+    echo -e "     and deploy ${YELLOW}deploy/nginx/cyrenus.conf${NC} or ${YELLOW}deploy/caddy/Caddyfile${NC}."
     
     echo -e "\n${BLUE}Useful Commands:${NC}"
     echo -e "  Stop service:    ${YELLOW}sudo systemctl stop cyrenus${NC}"

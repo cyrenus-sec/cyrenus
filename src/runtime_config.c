@@ -4,6 +4,7 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <time.h>
+#include <arpa/inet.h>
 #include <libconfig.h>
 #include "../include/runtime_config.h"
 #include "../include/config_handler.h"
@@ -14,17 +15,20 @@
 void runtime_config_init(struct runtime_config *rc) {
     memset(rc, 0, sizeof(struct runtime_config));
 
-    strncpy(rc->config_file_path, "/etc/cyrenus/cyrenus.conf", MAX_PATH_LEN - 1);
-    strncpy(rc->database_path, "/var/lib/cyrenus/cyrenus.db", MAX_PATH_LEN - 1);
-    strncpy(rc->geoip_db_path, "/var/lib/cyrenus/GeoLite2-Country.mmdb", MAX_PATH_LEN - 1);
-    strncpy(rc->master_key_path, "/etc/cyrenus/master.key", MAX_PATH_LEN - 1);
-    strncpy(rc->environment, "production", 31);
-    strncpy(rc->xdp_mode, "Not Attached", sizeof(rc->xdp_mode) - 1);
+    snprintf(rc->config_file_path, sizeof(rc->config_file_path), "/etc/cyrenus/cyrenus.conf");
+    snprintf(rc->database_path, sizeof(rc->database_path), "/var/lib/cyrenus/cyrenus.db");
+    snprintf(rc->geoip_db_path, sizeof(rc->geoip_db_path), "/var/lib/cyrenus/GeoLite2-Country.mmdb");
+    snprintf(rc->master_key_path, sizeof(rc->master_key_path), "/etc/cyrenus/master.key");
+    snprintf(rc->environment, sizeof(rc->environment), "production");
+    snprintf(rc->xdp_mode, sizeof(rc->xdp_mode), "Not Attached");
+    snprintf(rc->bind_address, sizeof(rc->bind_address), "0.0.0.0");
+    rc->cors_origin[0] = '\0';
+    rc->trusted_proxy[0] = '\0';
     rc->start_time = time(NULL);
 
     rc->http_port = 8181;
-    strncpy(rc->username, "admin", MAX_STRING_LEN - 1);
-    strncpy(rc->password, "admin", MAX_STRING_LEN - 1);
+    snprintf(rc->username, sizeof(rc->username), "admin");
+    snprintf(rc->password, sizeof(rc->password), "admin");
     rc->daemon_mode = false;
     rc->verbose = false;
     rc->debug = false;
@@ -43,6 +47,9 @@ void runtime_config_init(struct runtime_config *rc) {
     rc->global_syn_rate = DEFAULT_GLOBAL_SYN_RATE;
     rc->global_udp_rate = DEFAULT_GLOBAL_UDP_RATE;
     rc->max_dns_response_size = DEFAULT_MAX_DNS_RESP_SIZE;
+    rc->rst_flood_rate = DEFAULT_RST_FLOOD_RATE;
+    rc->ack_flood_rate = DEFAULT_ACK_FLOOD_RATE;
+    rc->synack_flood_rate = DEFAULT_SYNACK_FLOOD_RATE;
 }
 
 void runtime_config_to_bpf_cfg(const struct runtime_config *rc, struct attacks_config_t *cfg) {
@@ -58,6 +65,9 @@ void runtime_config_to_bpf_cfg(const struct runtime_config *rc, struct attacks_c
     cfg->global_syn_rate = rc->global_syn_rate;
     cfg->global_udp_rate = rc->global_udp_rate;
     cfg->max_dns_response_size = rc->max_dns_response_size > 0 ? rc->max_dns_response_size : DEFAULT_MAX_DNS_RESP_SIZE;
+    cfg->rst_flood_rate = rc->rst_flood_rate > 0 ? rc->rst_flood_rate : DEFAULT_RST_FLOOD_RATE;
+    cfg->ack_flood_rate = rc->ack_flood_rate > 0 ? rc->ack_flood_rate : DEFAULT_ACK_FLOOD_RATE;
+    cfg->synack_flood_rate = rc->synack_flood_rate > 0 ? rc->synack_flood_rate : DEFAULT_SYNACK_FLOOD_RATE;
 }
 
 void runtime_config_print_usage(const char *program_name) {
@@ -66,6 +76,8 @@ void runtime_config_print_usage(const char *program_name) {
     printf("Options:\n");
     printf("  -i, --interface IFACE       Network interface to monitor\n");
     printf("  -p, --port PORT             HTTP API port (default: 8181)\n");
+    printf("  --bind-address IP           HTTP/WS bind address (default: 0.0.0.0)\n");
+    printf("  --cors-origin ORIGIN        Allowed CORS origin (default: empty/same-origin)\n");
     printf("  -c, --config FILE           Configuration file path\n");
     printf("  -d, --database FILE         Database file path\n");
     printf("  -g, --geoip FILE            GeoIP database file path\n");
@@ -86,6 +98,9 @@ void runtime_config_print_usage(const char *program_name) {
     printf("\nEnvironment Variables:\n");
     printf("  CYRENUS_INTERFACE           Network interface to monitor\n");
     printf("  CYRENUS_HTTP_PORT           HTTP API port\n");
+    printf("  CYRENUS_BIND_ADDRESS        HTTP/WS bind address\n");
+    printf("  CYRENUS_CORS_ORIGIN         Allowed CORS origin\n");
+    printf("  CYRENUS_TRUSTED_PROXY       Trusted reverse proxy IP for X-Forwarded-For\n");
     printf("  CYRENUS_CONFIG              Configuration file path\n");
     printf("  CYRENUS_DB_PATH             Database file path\n");
     printf("  CYRENUS_GEOIP_DB            GeoIP database file path\n");
@@ -121,8 +136,10 @@ int runtime_config_parse_args(int argc, char **argv, struct runtime_config *rc) 
         {"no-geoip",        no_argument,       0, '1'},
         {"no-notifications",no_argument,       0, '2'},
         {"dry-run",         no_argument,       0, '3'},
-        {"help",            no_argument,       0, 'h'},
         {"version",         no_argument,       0, '4'},
+        {"bind-address",    required_argument, 0, '5'},
+        {"cors-origin",     required_argument, 0, '6'},
+        {"help",            no_argument,       0, 'h'},
         {0, 0, 0, 0}
     };
 
@@ -134,8 +151,7 @@ int runtime_config_parse_args(int argc, char **argv, struct runtime_config *rc) 
                               long_options, &option_index)) != -1) {
         switch (opt) {
             case 'i':
-                strncpy(rc->interface, optarg, IFNAMSIZ - 1);
-                rc->interface[IFNAMSIZ - 1] = '\0';
+                snprintf(rc->interface, sizeof(rc->interface), "%s", optarg);
                 break;
             case 'p':
                 rc->http_port = (uint16_t)atoi(optarg);
@@ -145,28 +161,22 @@ int runtime_config_parse_args(int argc, char **argv, struct runtime_config *rc) 
                 }
                 break;
             case 'c':
-                strncpy(rc->config_file_path, optarg, MAX_PATH_LEN - 1);
-                rc->config_file_path[MAX_PATH_LEN - 1] = '\0';
+                snprintf(rc->config_file_path, sizeof(rc->config_file_path), "%s", optarg);
                 break;
             case 'd':
-                strncpy(rc->database_path, optarg, MAX_PATH_LEN - 1);
-                rc->database_path[MAX_PATH_LEN - 1] = '\0';
+                snprintf(rc->database_path, sizeof(rc->database_path), "%s", optarg);
                 break;
             case 'g':
-                strncpy(rc->geoip_db_path, optarg, MAX_PATH_LEN - 1);
-                rc->geoip_db_path[MAX_PATH_LEN - 1] = '\0';
+                snprintf(rc->geoip_db_path, sizeof(rc->geoip_db_path), "%s", optarg);
                 break;
             case 'k':
-                strncpy(rc->master_key_path, optarg, MAX_PATH_LEN - 1);
-                rc->master_key_path[MAX_PATH_LEN - 1] = '\0';
+                snprintf(rc->master_key_path, sizeof(rc->master_key_path), "%s", optarg);
                 break;
             case 'u':
-                strncpy(rc->username, optarg, MAX_STRING_LEN - 1);
-                rc->username[MAX_STRING_LEN - 1] = '\0';
+                snprintf(rc->username, sizeof(rc->username), "%s", optarg);
                 break;
             case 'P':
-                strncpy(rc->password, optarg, MAX_STRING_LEN - 1);
-                rc->password[MAX_STRING_LEN - 1] = '\0';
+                snprintf(rc->password, sizeof(rc->password), "%s", optarg);
                 fprintf(stderr, "Warning: Passing password via command line is insecure!\n");
                 break;
             case 'D':
@@ -181,8 +191,7 @@ int runtime_config_parse_args(int argc, char **argv, struct runtime_config *rc) 
                 rc->log_level = 3;
                 break;
             case 'e':
-                strncpy(rc->environment, optarg, 31);
-                rc->environment[31] = '\0';
+                snprintf(rc->environment, sizeof(rc->environment), "%s", optarg);
                 break;
             case 'l':
                 rc->log_level = atoi(optarg);
@@ -192,8 +201,7 @@ int runtime_config_parse_args(int argc, char **argv, struct runtime_config *rc) 
                 }
                 break;
             case 'L':
-                strncpy(rc->log_file, optarg, MAX_PATH_LEN - 1);
-                rc->log_file[MAX_PATH_LEN - 1] = '\0';
+                snprintf(rc->log_file, sizeof(rc->log_file), "%s", optarg);
                 break;
             case '1':
                 rc->no_geoip = true;
@@ -210,6 +218,12 @@ int runtime_config_parse_args(int argc, char **argv, struct runtime_config *rc) 
             case '4':
                 runtime_config_print_version();
                 exit(0);
+            case '5':
+                snprintf(rc->bind_address, sizeof(rc->bind_address), "%s", optarg);
+                break;
+            case '6':
+                snprintf(rc->cors_origin, sizeof(rc->cors_origin), "%s", optarg);
+                break;
             default:
                 runtime_config_print_usage(argv[0]);
                 return -1;
@@ -217,8 +231,7 @@ int runtime_config_parse_args(int argc, char **argv, struct runtime_config *rc) 
     }
 
     if (optind < argc) {
-        strncpy(rc->config_file_path, argv[optind], MAX_PATH_LEN - 1);
-        rc->config_file_path[MAX_PATH_LEN - 1] = '\0';
+        snprintf(rc->config_file_path, sizeof(rc->config_file_path), "%s", argv[optind]);
     }
 
     return 0;
@@ -233,43 +246,65 @@ int runtime_config_load_file(struct runtime_config *rc) {
     }
 
     if (strlen(file_cfg.interface) > 0)
-        strncpy(rc->interface, file_cfg.interface, IFNAMSIZ - 1);
+        snprintf(rc->interface, sizeof(rc->interface), "%s", file_cfg.interface);
 
     if (file_cfg.http_port > 0)
         rc->http_port = (uint16_t)file_cfg.http_port;
 
     if (strlen(file_cfg.backend.url) > 0)
-        strncpy(rc->backend_url, file_cfg.backend.url, MAX_URL_LEN - 1);
+        snprintf(rc->backend_url, sizeof(rc->backend_url), "%s", file_cfg.backend.url);
 
     if (strlen(file_cfg.backend.api_key) > 0)
-        strncpy(rc->api_key, file_cfg.backend.api_key, 63);
+        snprintf(rc->api_key, sizeof(rc->api_key), "%s", file_cfg.backend.api_key);
 
     if (strlen(file_cfg.app_secret) > 0)
-        strncpy(rc->app_secret, file_cfg.app_secret, 63);
+        snprintf(rc->app_secret, sizeof(rc->app_secret), "%s", file_cfg.app_secret);
 
     if (strlen(file_cfg.username) > 0)
-        strncpy(rc->username, file_cfg.username, MAX_STRING_LEN - 1);
+        snprintf(rc->username, sizeof(rc->username), "%s", file_cfg.username);
 
     if (strlen(file_cfg.password) > 0)
-        strncpy(rc->password, file_cfg.password, MAX_STRING_LEN - 1);
+        snprintf(rc->password, sizeof(rc->password), "%s", file_cfg.password);
 
     config_t conf;
     config_init(&conf);
     if (config_read_file(&conf, rc->config_file_path)) {
-        const char *db_path = NULL;
-        const char *geoip_path = NULL;
+        const char *str_val = NULL;
+
+        if (config_lookup_string(&conf, "bind_address", &str_val) && str_val[0]) {
+            snprintf(rc->bind_address, sizeof(rc->bind_address), "%s", str_val);
+        }
+        if (config_lookup_string(&conf, "cors_origin", &str_val)) {
+            snprintf(rc->cors_origin, sizeof(rc->cors_origin), "%s", str_val);
+        }
+        if (config_lookup_string(&conf, "trusted_proxy", &str_val)) {
+            snprintf(rc->trusted_proxy, sizeof(rc->trusted_proxy), "%s", str_val);
+        }
+
+        config_setting_t *server = config_lookup(&conf, "server");
+        if (server != NULL) {
+            if (config_setting_lookup_string(server, "bind_address", &str_val) && str_val[0]) {
+                snprintf(rc->bind_address, sizeof(rc->bind_address), "%s", str_val);
+            }
+            if (config_setting_lookup_string(server, "cors_origin", &str_val)) {
+                snprintf(rc->cors_origin, sizeof(rc->cors_origin), "%s", str_val);
+            }
+            if (config_setting_lookup_string(server, "trusted_proxy", &str_val)) {
+                snprintf(rc->trusted_proxy, sizeof(rc->trusted_proxy), "%s", str_val);
+            }
+        }
 
         config_setting_t *database = config_lookup(&conf, "database");
         if (database != NULL) {
-            if (config_setting_lookup_string(database, "path", &db_path)) {
-                strncpy(rc->database_path, db_path, MAX_PATH_LEN - 1);
+            if (config_setting_lookup_string(database, "path", &str_val)) {
+                snprintf(rc->database_path, sizeof(rc->database_path), "%s", str_val);
             }
         }
 
         config_setting_t *geoip = config_lookup(&conf, "geoip");
         if (geoip != NULL) {
-            if (config_setting_lookup_string(geoip, "database_path", &geoip_path)) {
-                strncpy(rc->geoip_db_path, geoip_path, MAX_PATH_LEN - 1);
+            if (config_setting_lookup_string(geoip, "database_path", &str_val)) {
+                snprintf(rc->geoip_db_path, sizeof(rc->geoip_db_path), "%s", str_val);
             }
         }
 
@@ -300,6 +335,12 @@ int runtime_config_load_file(struct runtime_config *rc) {
                 rc->global_udp_rate = (uint32_t)val;
             if (config_setting_lookup_int(detection, "max_dns_response_size", &val) && val > 0)
                 rc->max_dns_response_size = (uint32_t)val;
+            if (config_setting_lookup_int(detection, "rst_flood_rate", &val) && val > 0)
+                rc->rst_flood_rate = (uint32_t)val;
+            if (config_setting_lookup_int(detection, "ack_flood_rate", &val) && val > 0)
+                rc->ack_flood_rate = (uint32_t)val;
+            if (config_setting_lookup_int(detection, "synack_flood_rate", &val) && val > 0)
+                rc->synack_flood_rate = (uint32_t)val;
         }
 
         config_destroy(&conf);
@@ -312,31 +353,40 @@ void runtime_config_load_env(struct runtime_config *rc) {
     char *env_val;
 
     if ((env_val = getenv(ENV_CYRENUS_INTERFACE)) != NULL)
-        strncpy(rc->interface, env_val, IFNAMSIZ - 1);
+        snprintf(rc->interface, sizeof(rc->interface), "%s", env_val);
 
     if ((env_val = getenv(ENV_CYRENUS_HTTP_PORT)) != NULL)
         rc->http_port = (uint16_t)atoi(env_val);
 
+    if ((env_val = getenv(ENV_CYRENUS_BIND_ADDRESS)) != NULL && env_val[0])
+        snprintf(rc->bind_address, sizeof(rc->bind_address), "%s", env_val);
+
+    if ((env_val = getenv(ENV_CYRENUS_CORS_ORIGIN)) != NULL)
+        snprintf(rc->cors_origin, sizeof(rc->cors_origin), "%s", env_val);
+
+    if ((env_val = getenv(ENV_CYRENUS_TRUSTED_PROXY)) != NULL)
+        snprintf(rc->trusted_proxy, sizeof(rc->trusted_proxy), "%s", env_val);
+
     if ((env_val = getenv(ENV_CYRENUS_CONFIG)) != NULL)
-        strncpy(rc->config_file_path, env_val, MAX_PATH_LEN - 1);
+        snprintf(rc->config_file_path, sizeof(rc->config_file_path), "%s", env_val);
 
     if ((env_val = getenv(ENV_CYRENUS_DB_PATH)) != NULL)
-        strncpy(rc->database_path, env_val, MAX_PATH_LEN - 1);
+        snprintf(rc->database_path, sizeof(rc->database_path), "%s", env_val);
 
     if ((env_val = getenv(ENV_CYRENUS_GEOIP_DB)) != NULL)
-        strncpy(rc->geoip_db_path, env_val, MAX_PATH_LEN - 1);
+        snprintf(rc->geoip_db_path, sizeof(rc->geoip_db_path), "%s", env_val);
 
     if ((env_val = getenv(ENV_CYRENUS_MASTER_KEY)) != NULL)
-        strncpy(rc->master_key_path, env_val, MAX_PATH_LEN - 1);
+        snprintf(rc->master_key_path, sizeof(rc->master_key_path), "%s", env_val);
 
     if ((env_val = getenv(ENV_CYRENUS_ENV)) != NULL)
-        strncpy(rc->environment, env_val, 31);
+        snprintf(rc->environment, sizeof(rc->environment), "%s", env_val);
 
     if ((env_val = getenv(ENV_CYRENUS_LOG_LEVEL)) != NULL)
         rc->log_level = atoi(env_val);
 
     if ((env_val = getenv(ENV_CYRENUS_LOG_FILE)) != NULL)
-        strncpy(rc->log_file, env_val, MAX_PATH_LEN - 1);
+        snprintf(rc->log_file, sizeof(rc->log_file), "%s", env_val);
 }
 
 int runtime_config_validate(const struct runtime_config *rc) {
@@ -348,6 +398,16 @@ int runtime_config_validate(const struct runtime_config *rc) {
     if (rc->http_port == 0 || rc->http_port > 65535) {
         fprintf(stderr, "Error: Invalid HTTP port: %d\n", rc->http_port);
         return -1;
+    }
+
+    if (rc->bind_address[0] != '\0') {
+        struct in_addr v4;
+        struct in6_addr v6;
+        if (inet_pton(AF_INET, rc->bind_address, &v4) != 1 &&
+            inet_pton(AF_INET6, rc->bind_address, &v6) != 1) {
+            fprintf(stderr, "Error: Invalid bind_address: %s\n", rc->bind_address);
+            return -1;
+        }
     }
 
     if (access(rc->config_file_path, R_OK) != 0) {
@@ -365,13 +425,21 @@ int runtime_config_validate(const struct runtime_config *rc) {
         fprintf(stderr, "Warning: Unknown environment '%s', using 'production'\n", rc->environment);
     }
 
+    if (strcmp(rc->environment, "production") == 0 &&
+        (strcmp(rc->password, "secret") == 0 || strcmp(rc->password, "admin") == 0)) {
+        fprintf(stderr, "Warning: Default admin password detected in production environment!\n");
+    }
+
     return 0;
 }
 
 void runtime_config_print(const struct runtime_config *rc) {
     printf("=== Runtime Configuration ===\n");
     printf("Interface:       %s\n", rc->interface);
+    printf("Bind Address:    %s\n", rc->bind_address[0] ? rc->bind_address : "0.0.0.0");
     printf("HTTP Port:       %d\n", rc->http_port);
+    printf("CORS Origin:     %s\n", rc->cors_origin[0] ? rc->cors_origin : "(same-origin only)");
+    printf("Trusted Proxy:   %s\n", rc->trusted_proxy[0] ? rc->trusted_proxy : "(none)");
     printf("Config File:     %s\n", rc->config_file_path);
     printf("Database:        %s\n", rc->database_path);
     printf("GeoIP DB:        %s\n", rc->geoip_db_path);
@@ -387,8 +455,9 @@ void runtime_config_print(const struct runtime_config *rc) {
     printf("GeoIP:           %s\n", rc->no_geoip ? "disabled" : "enabled");
     printf("Notifications:   %s\n", rc->no_notifications ? "disabled" : "enabled");
     printf("Dry Run:         %s\n", rc->dry_run ? "yes" : "no");
-    printf("Thresholds:      SYN=%u UDP=%u ICMP=%u DNS=%u FRAGS=%u AutoBlock=%u(%us)\n",
-           rc->syn_flood_rate, rc->udp_flood_rate, rc->icmp_flood_rate,
-           rc->dns_amp_rate, rc->max_frags, rc->auto_block_enabled, rc->auto_block_duration_sec);
+    printf("Thresholds:      SYN=%u SYNACK=%u RST=%u ACK=%u UDP=%u ICMP=%u DNS=%u FRAGS=%u AutoBlock=%u(%us)\n",
+           rc->syn_flood_rate, rc->synack_flood_rate, rc->rst_flood_rate, rc->ack_flood_rate,
+           rc->udp_flood_rate, rc->icmp_flood_rate, rc->dns_amp_rate, rc->max_frags,
+           rc->auto_block_enabled, rc->auto_block_duration_sec);
     printf("============================\n");
 }

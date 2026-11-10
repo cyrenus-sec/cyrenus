@@ -10,6 +10,7 @@ spec:
   # 1. Monitor writes to /etc (configuration files)
   - call: "security_file_permission"
     syscall: false
+    message: "WARNING file integrity: unauthorized write to /etc configuration file"
     args:
     - index: 0
       type: "file"
@@ -31,6 +32,7 @@ spec:
   # 2. Monitor binary modifications
   - call: "security_file_permission"
     syscall: false
+    message: "CRITICAL file integrity: system binary modification detected"
     args:
     - index: 0
       type: "file"
@@ -55,6 +57,7 @@ spec:
   # 3. Monitor SSH key access
   - call: "security_file_open"
     syscall: false
+    message: "WARNING file integrity: sensitive SSH key or authorized_keys access"
     args:
     - index: 0
       type: "file"
@@ -74,6 +77,7 @@ spec:
   # 4. Monitor web directory writes (webshell detection)
   - call: "security_file_permission"
     syscall: false
+    message: "CRITICAL webshell upload detected: unauthorized write in web directory"
     args:
     - index: 0
       type: "file"
@@ -107,6 +111,7 @@ spec:
   # 5. Monitor /tmp directory script file creation (webshell detection)
   - call: "security_file_permission"
     syscall: false
+    message: "WARNING webshell upload indicator: suspicious script file created in temp directory"
     args:
     - index: 0
       type: "file"
@@ -174,6 +179,7 @@ spec:
   # 6. Monitor sensitive log file access
   - call: "security_file_open"
     syscall: false
+    message: "WARNING file integrity: sensitive authentication/audit log access detected"
     args:
     - index: 0
       type: "file"
@@ -198,6 +204,7 @@ spec:
   # 7. Monitor cron file modifications
   - call: "security_file_permission"
     syscall: false
+    message: "CRITICAL persistence detected: unauthorized cron schedule modification"
     args:
     - index: 0
       type: "file"
@@ -220,6 +227,7 @@ spec:
   # 8. Monitor systemd service file changes
   - call: "security_file_permission"
     syscall: false
+    message: "CRITICAL persistence detected: systemd unit file modification"
     args:
     - index: 0
       type: "file"
@@ -243,6 +251,7 @@ spec:
   # 9. Monitor passwd/shadow file access
   - call: "security_file_open"
     syscall: false
+    message: "CRITICAL file integrity: unauthorized access to /etc/passwd or /etc/shadow"
     args:
     - index: 0
       type: "file"
@@ -268,6 +277,7 @@ spec:
   # 10. Monitor LD_PRELOAD configuration
   - call: "security_file_permission"
     syscall: false
+    message: "CRITICAL persistence / privilege escalation: /etc/ld.so.preload modification"
     args:
     - index: 0
       type: "file"

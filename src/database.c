@@ -360,6 +360,8 @@ int database_create_schema(struct database *db) {
     run_sql(db->db, "CREATE INDEX IF NOT EXISTS idx_attacks_ip_type ON attacks(src_ip, attack_type);");
     run_sql(db->db, "CREATE INDEX IF NOT EXISTS idx_rules_tuple ON rules(ip_address, port_start, protocol);");
     run_sql(db->db, "CREATE INDEX IF NOT EXISTS idx_iplists_type ON ip_lists(list_type);");
+    run_sql(db->db, "CREATE INDEX IF NOT EXISTS idx_corr_timestamp ON attack_correlation(timestamp);");
+    run_sql(db->db, "CREATE INDEX IF NOT EXISTS idx_corr_ip_type ON attack_correlation(source_ip, attack_type, timestamp);");
 
     db_unlock(db);
     return 0;
@@ -592,6 +594,32 @@ int database_get_attack(struct database *db, int64_t id, struct attack_record *a
     sqlite3_finalize(stmt);
     db_unlock(db);
     return res;
+}
+
+int64_t database_find_recent_attack_by_ip(struct database *db, const char *src_ip, time_t cutoff_ts) {
+    if (!db || !db->is_open || !src_ip || !src_ip[0]) return 0;
+    db_lock(db);
+
+    const char *sql =
+        "SELECT id FROM attacks "
+        "WHERE src_ip = ? AND timestamp >= ? "
+        "ORDER BY timestamp DESC, id DESC LIMIT 1;";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        db_unlock(db);
+        return 0;
+    }
+
+    sqlite3_bind_text(stmt, 1, src_ip, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 2, (sqlite3_int64)cutoff_ts);
+
+    int64_t attack_id = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        attack_id = sqlite3_column_int64(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    db_unlock(db);
+    return attack_id;
 }
 
 int database_list_attacks(struct database *db, struct attack_record **attacks, int *count, int limit, int offset) {
@@ -1680,13 +1708,15 @@ int database_update_api_key_last_used(struct database *db, int id) {
 
 // --- Security Event Operations (Tetragon Integration) ---
 
-int db_insert_security_event(int64_t timestamp, const char *event_type, int severity,
-                             const char *process_name, int pid, int ppid, int uid,
-                             const char *command, const char *binary_path,
-                             const char *parent_binary, const char *action,
-                             const char *policy_name, const char *src_ip,
-                             const char *dst_ip, int dst_port, const char *file_path,
-                             const char *file_operation, const char *metadata) {
+int db_insert_security_event_ex(int64_t timestamp, const char *event_type, int severity,
+                                const char *process_name, int pid, int ppid, int uid,
+                                const char *command, const char *binary_path,
+                                const char *parent_binary, const char *action,
+                                const char *policy_name, const char *src_ip,
+                                const char *dst_ip, int dst_port, const char *file_path,
+                                const char *file_operation, const char *metadata,
+                                int64_t *new_id_out) {
+    if (new_id_out) *new_id_out = 0;
     if (!g_db || !g_db->is_open) return -1;
     db_lock(g_db);
 
@@ -1704,7 +1734,7 @@ int db_insert_security_event(int64_t timestamp, const char *event_type, int seve
     }
 
     sqlite3_bind_int64(stmt, 1, timestamp);
-    sqlite3_bind_text(stmt, 2, event_type ? event_type : "unknown", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, (event_type && event_type[0]) ? event_type : "unknown", -1, SQLITE_TRANSIENT);
     sqlite3_bind_int(stmt, 3, severity);
     sqlite3_bind_text(stmt, 4, process_name ? process_name : "", -1, SQLITE_TRANSIENT);
     sqlite3_bind_int(stmt, 5, pid);
@@ -1716,28 +1746,44 @@ int db_insert_security_event(int64_t timestamp, const char *event_type, int seve
     sqlite3_bind_text(stmt, 11, action ? action : "", -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 12, policy_name ? policy_name : "", -1, SQLITE_TRANSIENT);
 
-    if (src_ip) sqlite3_bind_text(stmt, 13, src_ip, -1, SQLITE_TRANSIENT);
+    if (src_ip && src_ip[0]) sqlite3_bind_text(stmt, 13, src_ip, -1, SQLITE_TRANSIENT);
     else sqlite3_bind_null(stmt, 13);
 
-    if (dst_ip) sqlite3_bind_text(stmt, 14, dst_ip, -1, SQLITE_TRANSIENT);
+    if (dst_ip && dst_ip[0]) sqlite3_bind_text(stmt, 14, dst_ip, -1, SQLITE_TRANSIENT);
     else sqlite3_bind_null(stmt, 14);
 
     if (dst_port > 0) sqlite3_bind_int(stmt, 15, dst_port);
     else sqlite3_bind_null(stmt, 15);
 
-    if (file_path) sqlite3_bind_text(stmt, 16, file_path, -1, SQLITE_TRANSIENT);
+    if (file_path && file_path[0]) sqlite3_bind_text(stmt, 16, file_path, -1, SQLITE_TRANSIENT);
     else sqlite3_bind_null(stmt, 16);
 
-    if (file_operation) sqlite3_bind_text(stmt, 17, file_operation, -1, SQLITE_TRANSIENT);
+    if (file_operation && file_operation[0]) sqlite3_bind_text(stmt, 17, file_operation, -1, SQLITE_TRANSIENT);
     else sqlite3_bind_null(stmt, 17);
 
-    if (metadata) sqlite3_bind_text(stmt, 18, metadata, -1, SQLITE_TRANSIENT);
+    if (metadata && metadata[0]) sqlite3_bind_text(stmt, 18, metadata, -1, SQLITE_TRANSIENT);
     else sqlite3_bind_null(stmt, 18);
 
     int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE && new_id_out) {
+        *new_id_out = (int64_t)sqlite3_last_insert_rowid(g_db->db);
+    }
     sqlite3_finalize(stmt);
     db_unlock(g_db);
     return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+int db_insert_security_event(int64_t timestamp, const char *event_type, int severity,
+                             const char *process_name, int pid, int ppid, int uid,
+                             const char *command, const char *binary_path,
+                             const char *parent_binary, const char *action,
+                             const char *policy_name, const char *src_ip,
+                             const char *dst_ip, int dst_port, const char *file_path,
+                             const char *file_operation, const char *metadata) {
+    return db_insert_security_event_ex(timestamp, event_type, severity, process_name,
+                                       pid, ppid, uid, command, binary_path, parent_binary,
+                                       action, policy_name, src_ip, dst_ip, dst_port,
+                                       file_path, file_operation, metadata, NULL);
 }
 
 int database_list_security_events(struct database *db, struct security_event_record **events,
@@ -1901,6 +1947,30 @@ int database_insert_attack_correlation(struct database *db,
     sqlite3_finalize(stmt);
     db_unlock(db);
     return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+int database_has_recent_correlation(struct database *db, const char *src_ip,
+                                    const char *attack_type, time_t cutoff_ts) {
+    if (!db || !db->is_open || !attack_type || !attack_type[0]) return 0;
+    db_lock(db);
+
+    const char *sql =
+        "SELECT id FROM attack_correlation "
+        "WHERE source_ip = ? AND attack_type = ? AND timestamp >= ? LIMIT 1;";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        db_unlock(db);
+        return 0;
+    }
+
+    sqlite3_bind_text(stmt, 1, src_ip ? src_ip : "", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, attack_type, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 3, (sqlite3_int64)cutoff_ts);
+
+    int found = (sqlite3_step(stmt) == SQLITE_ROW) ? 1 : 0;
+    sqlite3_finalize(stmt);
+    db_unlock(db);
+    return found;
 }
 
 int database_list_attack_correlations(struct database *db,

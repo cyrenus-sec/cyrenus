@@ -50,6 +50,17 @@ $(USER_OBJ): $(USER_SRC)
 
 clean:
 	rm -rf build
+
+test: $(KERNEL_OBJ) $(USER_OBJ)
+	@echo "=== Running Cyrenus Build & Integration Self-Tests ==="
+	@bash -n install.sh install-binary.sh create-release.sh uninstall.sh web/build.sh scripts/test.sh scripts/install_tetragon.sh test_fix6.sh tests/verify_policies.sh tests/security_benchmark.sh
+	@python3 -m py_compile tests/benchmark_runner.py
+	@$(USER_OBJ) --version
+	@$(USER_OBJ) --help >/dev/null
+	@llvm-objdump --section-headers $(KERNEL_OBJ) >/dev/null
+	@echo "=== Checking script & policy line endings (LF) ==="
+	@! grep -rn $$'\r' ebpf/ include/*.h src/ scripts/*.sh tests/*.sh tests/*.py config/tetragon/ install.sh web/build.sh || (echo "ERROR: CRLF line endings detected!" && exit 1)
+	@echo "=== All build/static self-tests passed (run 'sudo bash tests/security_benchmark.sh' for live XDP/netns verification) ==="
 	
 # For development: add a target to compile and check eBPF program
 check_ebpf: $(KERNEL_OBJ)

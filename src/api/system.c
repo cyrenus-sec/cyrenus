@@ -82,6 +82,10 @@ enum MHD_Result api_system_stats(struct MHD_Connection *connection,
                         g_sum.rule_drops += per_cpu[i].rule_drops;
                         g_sum.geo_drops += per_cpu[i].geo_drops;
                         g_sum.autoblock_drops += per_cpu[i].autoblock_drops;
+                        g_sum.amp_drops += per_cpu[i].amp_drops;
+                        g_sum.ack_drops += per_cpu[i].ack_drops;
+                        g_sum.rst_drops += per_cpu[i].rst_drops;
+                        g_sum.malformed_drops += per_cpu[i].malformed_drops;
                     }
                 }
                 free(per_cpu);
@@ -96,7 +100,7 @@ enum MHD_Result api_system_stats(struct MHD_Connection *connection,
 
     int active_blocks = 0;
     if (ctx && ctx->fds && ctx->fds->auto_block_fd >= 0) {
-        uint32_t k = 0, nk = 0;
+        struct cyrenus_ip k = {0}, nk = {0};
         void *cur = NULL;
         struct auto_block_val val;
         while (bpf_map_get_next_key(ctx->fds->auto_block_fd, cur, &nk) == 0) {
@@ -182,6 +186,10 @@ enum MHD_Result api_system_stats(struct MHD_Connection *connection,
     json_object_object_add(j_global, "rule_drops", json_object_new_int64((int64_t)g_sum.rule_drops));
     json_object_object_add(j_global, "geo_drops", json_object_new_int64((int64_t)g_sum.geo_drops));
     json_object_object_add(j_global, "autoblock_drops", json_object_new_int64((int64_t)g_sum.autoblock_drops));
+    json_object_object_add(j_global, "amp_drops", json_object_new_int64((int64_t)g_sum.amp_drops));
+    json_object_object_add(j_global, "ack_drops", json_object_new_int64((int64_t)g_sum.ack_drops));
+    json_object_object_add(j_global, "rst_drops", json_object_new_int64((int64_t)g_sum.rst_drops));
+    json_object_object_add(j_global, "malformed_drops", json_object_new_int64((int64_t)g_sum.malformed_drops));
     json_object_object_add(j_stats, "global_stats", j_global);
 
     const char *json_str = json_object_to_json_string(j_stats);
@@ -216,6 +224,9 @@ enum MHD_Result api_system_get_settings(struct MHD_Connection *connection,
         json_object_object_add(j_settings, "global_syn_rate", json_object_new_int64((int64_t)ctx->config->global_syn_rate));
         json_object_object_add(j_settings, "global_udp_rate", json_object_new_int64((int64_t)ctx->config->global_udp_rate));
         json_object_object_add(j_settings, "max_dns_response_size", json_object_new_int64((int64_t)ctx->config->max_dns_response_size));
+        json_object_object_add(j_settings, "rst_flood_rate", json_object_new_int64((int64_t)ctx->config->rst_flood_rate));
+        json_object_object_add(j_settings, "ack_flood_rate", json_object_new_int64((int64_t)ctx->config->ack_flood_rate));
+        json_object_object_add(j_settings, "synack_flood_rate", json_object_new_int64((int64_t)ctx->config->synack_flood_rate));
     }
 
     const char *json_str = json_object_to_json_string(j_settings);
@@ -299,6 +310,21 @@ enum MHD_Result api_system_update_settings(struct MHD_Connection *connection,
         if (v < 64 || v > 65535) { json_object_put(root); return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "max_dns_response_size must be 64..65535"); }
         next.max_dns_response_size = (uint32_t)v;
     }
+    if (json_object_object_get_ex(root, "rst_flood_rate", &j_val)) {
+        int64_t v = json_object_get_int64(j_val);
+        if (v < 1 || v > 10000000) { json_object_put(root); return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "rst_flood_rate must be 1..10000000"); }
+        next.rst_flood_rate = (uint32_t)v;
+    }
+    if (json_object_object_get_ex(root, "ack_flood_rate", &j_val)) {
+        int64_t v = json_object_get_int64(j_val);
+        if (v < 1 || v > 10000000) { json_object_put(root); return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "ack_flood_rate must be 1..10000000"); }
+        next.ack_flood_rate = (uint32_t)v;
+    }
+    if (json_object_object_get_ex(root, "synack_flood_rate", &j_val)) {
+        int64_t v = json_object_get_int64(j_val);
+        if (v < 1 || v > 10000000) { json_object_put(root); return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "synack_flood_rate must be 1..10000000"); }
+        next.synack_flood_rate = (uint32_t)v;
+    }
 
     *ctx->config = next;
 
@@ -314,6 +340,9 @@ enum MHD_Result api_system_update_settings(struct MHD_Connection *connection,
         persist_u32_setting(ctx->db, "global_syn_rate", next.global_syn_rate);
         persist_u32_setting(ctx->db, "global_udp_rate", next.global_udp_rate);
         persist_u32_setting(ctx->db, "max_dns_response_size", next.max_dns_response_size);
+        persist_u32_setting(ctx->db, "rst_flood_rate", next.rst_flood_rate);
+        persist_u32_setting(ctx->db, "ack_flood_rate", next.ack_flood_rate);
+        persist_u32_setting(ctx->db, "synack_flood_rate", next.synack_flood_rate);
     }
 
     // Update BPF config_map if attached

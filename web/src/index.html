@@ -11,7 +11,7 @@
 
 <body class="bg-brand-dark text-gray-200 font-sans antialiased h-screen overflow-hidden">
     <div id="app" x-data="dashboard_data"
-        @keydown.escape.window="sponsorshipModalOpen = false; security.showModal = false; generatedKey = null; sidebarOpen = false"
+        @keydown.escape.window="sponsorshipModalOpen = false; security.showModal = false; security.showConfigModal = false; generatedKey = null; sidebarOpen = false"
         class="flex h-full relative">
 
         <!-- Mobile Sidebar Backdrop -->
@@ -318,7 +318,7 @@
                             <h3 class="text-sm font-bold text-gray-300 uppercase tracking-wider">XDP Drop Vector Breakdown (Cumulative)</h3>
                             <span class="text-xs text-gray-500">Rules: <span class="text-gray-300" x-text="systemStats.rules_count"></span> &bull; WL: <span class="text-gray-300" x-text="systemStats.whitelist_count"></span> &bull; BL: <span class="text-gray-300" x-text="systemStats.blacklist_count"></span></span>
                         </div>
-                        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+                        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
                             <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
                                 <p class="text-[10px] uppercase font-bold text-gray-500">SYN Drops</p>
                                 <p class="text-lg font-bold text-red-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.syn_drops)">0</p>
@@ -334,6 +334,22 @@
                             <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
                                 <p class="text-[10px] uppercase font-bold text-gray-500">DNS Amp</p>
                                 <p class="text-lg font-bold text-yellow-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.dns_drops)">0</p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
+                                <p class="text-[10px] uppercase font-bold text-gray-500">Amp Drops</p>
+                                <p class="text-lg font-bold text-lime-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.amp_drops)">0</p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
+                                <p class="text-[10px] uppercase font-bold text-gray-500">ACK Drops</p>
+                                <p class="text-lg font-bold text-sky-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.ack_drops)">0</p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
+                                <p class="text-[10px] uppercase font-bold text-gray-500">RST Drops</p>
+                                <p class="text-lg font-bold text-indigo-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.rst_drops)">0</p>
+                            </div>
+                            <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
+                                <p class="text-[10px] uppercase font-bold text-gray-500">Malformed</p>
+                                <p class="text-lg font-bold text-fuchsia-400 tabular-nums mt-0.5" x-text="formatNumber(systemStats.global_stats.malformed_drops)">0</p>
                             </div>
                             <div class="bg-brand-dark/60 border border-gray-800 rounded-lg p-3">
                                 <p class="text-[10px] uppercase font-bold text-gray-500">Fragment</p>
@@ -627,6 +643,11 @@
                                         <option value="UDP Flood">UDP Flood</option>
                                         <option value="ICMP Flood">ICMP Flood</option>
                                         <option value="DNS Amplification">DNS Amplification</option>
+                                        <option value="UDP Amplification">UDP Amplification</option>
+                                        <option value="TCP ACK Flood">TCP ACK Flood</option>
+                                        <option value="TCP RST Flood">TCP RST Flood</option>
+                                        <option value="SYN-ACK Reflection">SYN-ACK Reflection</option>
+                                        <option value="Malformed Packet">Malformed Packet</option>
                                         <option value="Fragment Attack">Fragment Attack</option>
                                         <option value="GeoIP Block">GeoIP Block</option>
                                         <option value="Distributed">Distributed Flood</option>
@@ -701,9 +722,9 @@
                                                 </div>
                                             </td>
                                             <td class="px-5 py-3.5 text-right whitespace-nowrap space-x-1">
-                                                <button x-show="attack.src_ip !== '0.0.0.0'" @click="blockIP(attack.src_ip)"
+                                                <button x-show="attack.src_ip !== '0.0.0.0' && attack.src_ip !== '::'" @click="blockIP(attack.src_ip)"
                                                     class="text-xs text-red-400 hover:text-red-300 border border-red-500/30 px-2 py-1 rounded font-semibold transition">Perm Drop</button>
-                                                <button x-show="attack.src_ip !== '0.0.0.0'" @click="whitelistIP(attack.src_ip, 'False positive / trusted')"
+                                                <button x-show="attack.src_ip !== '0.0.0.0' && attack.src_ip !== '::'" @click="whitelistIP(attack.src_ip, 'False positive / trusted')"
                                                     class="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-500/30 px-2 py-1 rounded font-semibold transition">Whitelist</button>
                                                 <button x-show="attack.status !== 'resolved'" @click="resolveAttack(attack)"
                                                     class="text-xs text-gray-300 hover:text-white border border-gray-700 bg-gray-800 px-2 py-1 rounded font-semibold transition">Resolve</button>
@@ -809,8 +830,8 @@
                             <h3 class="text-base font-bold text-white mb-5">Deploy Firewall Rule</h3>
                             <form @submit.prevent="addRule()" class="space-y-4">
                                 <div>
-                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">IPv4 Address</label>
-                                    <input type="text" x-model="newRule.ip" placeholder="e.g. 203.0.113.50" required
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">IPv4 / IPv6 Address</label>
+                                    <input type="text" x-model="newRule.ip" placeholder="e.g. 203.0.113.50 or 2001:db8::1" required
                                         class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
                                 </div>
                                 <div class="grid grid-cols-2 gap-3">
@@ -827,6 +848,7 @@
                                             <option value="tcp">TCP</option>
                                             <option value="udp">UDP</option>
                                             <option value="icmp">ICMP</option>
+                                            <option value="icmpv6">ICMPv6</option>
                                         </select>
                                     </div>
                                 </div>
@@ -859,12 +881,12 @@
                             <form @submit.prevent="addIpListEntry()" class="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
                                 <div class="md:col-span-2">
                                     <label class="block text-xs font-bold text-gray-400 uppercase mb-1">IP or IP/CIDR</label>
-                                    <input type="text" x-model="newIpList.ip_address" placeholder="192.168.1.0 or 10.0.0.5" required
+                                    <input type="text" x-model="newIpList.ip_address" placeholder="e.g. 192.168.1.0/24 or 2001:db8::/64" required
                                         class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
                                 </div>
                                 <div>
-                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">CIDR (/1-32)</label>
-                                    <input type="number" min="1" max="32" x-model.number="newIpList.cidr_range"
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">CIDR (/1-128)</label>
+                                    <input type="number" min="1" max="128" x-model.number="newIpList.cidr_range"
                                         class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
                                 </div>
                                 <div>
@@ -975,7 +997,7 @@
                             <div class="bg-brand-light rounded-xl border border-gray-800 p-5 shadow-lg space-y-4 h-fit">
                                 <h3 class="text-base font-bold text-white">IP Geolocation Lookup</h3>
                                 <form @submit.prevent="lookupGeoIp()" class="flex gap-2">
-                                    <input type="text" x-model="geoLookupIp" placeholder="Enter IPv4 address (e.g. 8.8.8.8)"
+                                    <input type="text" x-model="geoLookupIp" placeholder="Enter IPv4 or IPv6 (e.g. 8.8.8.8 or 2001:4860:4860::8888)"
                                         class="flex-1 bg-brand-dark border border-gray-700 rounded-lg px-3.5 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
                                     <button type="submit"
                                         class="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-4 py-2 rounded-lg text-sm transition">Lookup</button>
@@ -1022,6 +1044,11 @@
                         <button @click="securitySubTab = 'events'"
                             :class="securitySubTab === 'events' ? 'bg-brand-accent text-white border-cyan-500/40' : 'bg-brand-light text-gray-400 border-gray-800 hover:text-white'"
                             class="px-4 py-2 rounded-lg text-sm font-semibold border transition">Runtime Events</button>
+                        <button @click="securitySubTab = 'correlations'; fetchSecurityCorrelations()"
+                            :class="securitySubTab === 'correlations' ? 'bg-brand-accent text-white border-cyan-500/40' : 'bg-brand-light text-gray-400 border-gray-800 hover:text-white'"
+                            class="px-4 py-2 rounded-lg text-sm font-semibold border transition">
+                            Attack Correlations (<span x-text="security.correlations.length"></span>)
+                        </button>
                         <button @click="securitySubTab = 'policies'; fetchSecurityPolicies()"
                             :class="securitySubTab === 'policies' ? 'bg-brand-accent text-white border-cyan-500/40' : 'bg-brand-light text-gray-400 border-gray-800 hover:text-white'"
                             class="px-4 py-2 rounded-lg text-sm font-semibold border transition">
@@ -1092,15 +1119,71 @@
                         </div>
                     </div>
 
+                    <!-- Correlations Panel -->
+                    <div x-show="securitySubTab === 'correlations'" class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
+                        <div class="p-5 border-b border-gray-800 flex flex-wrap justify-between items-center gap-3 bg-gray-900/40">
+                            <div>
+                                <h3 class="text-base font-bold text-white">Cross-Layer XDP &amp; Host Security Correlations</h3>
+                                <p class="text-xs text-gray-400">Links XDP network attacks and blocked IPs with Tetragon runtime executions and socket/file probes.</p>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <select x-model.number="security.corrMinConfidence" @change="fetchSecurityCorrelations()"
+                                    class="bg-brand-dark border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+                                    <option value="0">All Confidence Levels</option>
+                                    <option value="0.7">High (&ge; 70%)</option>
+                                    <option value="0.9">Critical (&ge; 90%)</option>
+                                </select>
+                                <button @click="fetchSecurityCorrelations()"
+                                    class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition">Refresh</button>
+                            </div>
+                        </div>
+                        <div class="divide-y divide-gray-800 max-h-[600px] overflow-y-auto">
+                            <template x-for="corr in security.correlations" :key="'corr_' + corr.id">
+                                <div class="p-4 hover:bg-gray-800/20 transition-colors border-l-4"
+                                    :class="(corr.confidence_score || 0) >= 0.9 ? 'border-red-600 bg-red-900/5' : ((corr.confidence_score || 0) >= 0.7 ? 'border-amber-500 bg-amber-900/5' : 'border-cyan-600')">
+                                    <div class="flex flex-wrap justify-between items-start gap-2 mb-1.5">
+                                        <div class="flex flex-wrap items-center gap-2">
+                                            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tabular-nums"
+                                                :class="(corr.confidence_score || 0) >= 0.9 ? 'bg-red-600 text-white' : ((corr.confidence_score || 0) >= 0.7 ? 'bg-amber-500 text-black' : 'bg-cyan-600/30 text-cyan-300')"
+                                                x-text="Math.round((Number(corr.confidence_score) || 0) * 100) + '% CONF'"></span>
+                                            <span class="font-bold text-sm text-white" x-text="corr.attack_type"></span>
+                                            <span x-show="corr.source_ip" class="font-mono text-xs text-red-400 bg-red-500/10 border border-red-500/30 px-2 py-0.5 rounded"
+                                                x-text="corr.source_ip"></span>
+                                        </div>
+                                        <span class="text-gray-500 text-xs font-mono"
+                                            x-text="new Date((corr.timestamp || 0) * 1000).toLocaleString()"></span>
+                                    </div>
+                                    <p class="text-xs text-gray-300 mb-2" x-text="corr.description"></p>
+                                    <div class="flex flex-wrap items-center gap-2 text-[11px] text-gray-400 font-mono">
+                                        <span x-show="corr.network_event_id > 0"
+                                            class="bg-gray-800 border border-gray-700 px-2 py-0.5 rounded"
+                                            x-text="'net_id #' + corr.network_event_id"></span>
+                                        <span x-show="corr.security_event_id > 0"
+                                            class="bg-gray-800 border border-gray-700 px-2 py-0.5 rounded"
+                                            x-text="'sec_id #' + corr.security_event_id"></span>
+                                        <span x-show="corr.details" class="text-cyan-300/80 break-all" x-text="corr.details"></span>
+                                    </div>
+                                </div>
+                            </template>
+                            <div x-show="security.correlations.length === 0" class="p-12 text-center text-sm text-gray-500">
+                                No cross-layer attack correlations recorded in this window.
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Policies Panel -->
                     <div x-show="securitySubTab === 'policies'" class="bg-brand-light rounded-xl border border-gray-800 shadow-lg overflow-hidden">
-                        <div class="p-5 border-b border-gray-800 flex justify-between items-center">
+                        <div class="p-5 border-b border-gray-800 flex flex-wrap justify-between items-center gap-3">
                             <div>
                                 <h3 class="text-base font-bold text-white">Tetragon TracingPolicies (YAML)</h3>
                                 <p class="text-xs text-gray-400">Inspect, edit, create, and deploy kernel tracing policies.</p>
                             </div>
-                            <button @click="openNewPolicyModal()"
-                                class="bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold px-3.5 py-2 rounded-lg transition">+ New Policy</button>
+                            <div class="flex items-center gap-2">
+                                <button @click="openTetragonConfigModal()"
+                                    class="bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 text-xs font-bold px-3.5 py-2 rounded-lg transition">Agent Config</button>
+                                <button @click="openNewPolicyModal()"
+                                    class="bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold px-3.5 py-2 rounded-lg transition">+ New Policy</button>
+                            </div>
                         </div>
                         <div class="divide-y divide-gray-800">
                             <template x-for="pol in security.policies" :key="pol.name">
@@ -1260,6 +1343,21 @@
                                     <input type="number" min="0" max="50000000" x-model.number="settings.global_udp_rate"
                                         class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
                                 </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">RST Flood Rate (PPS/IP)</label>
+                                    <input type="number" min="1" max="10000000" x-model.number="settings.rst_flood_rate"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">ACK Flood Rate (PPS/IP)</label>
+                                    <input type="number" min="1" max="10000000" x-model.number="settings.ack_flood_rate"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">SYN-ACK Rate (PPS/IP)</label>
+                                    <input type="number" min="1" max="10000000" x-model.number="settings.synack_flood_rate"
+                                        class="w-full bg-brand-dark border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono">
+                                </div>
                             </div>
 
                             <div class="pt-4 border-t border-gray-800 flex justify-end">
@@ -1351,6 +1449,32 @@
                         class="bg-gray-800 hover:bg-gray-700 text-gray-200 px-4 py-2 rounded-lg text-sm font-semibold">Cancel</button>
                     <button @click="savePolicy()"
                         class="bg-cyan-600 hover:bg-cyan-500 text-white px-5 py-2 rounded-lg text-sm font-bold">Save Policy</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tetragon Agent Config Modal -->
+        <div x-cloak x-show="security.showConfigModal"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+            <div @click.outside="security.showConfigModal = false"
+                class="bg-brand-light border border-gray-700 rounded-xl shadow-2xl max-w-3xl w-full p-6 space-y-4">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-bold text-white">Tetragon Agent Configuration (`tetragon.yaml`)</h3>
+                    <button @click="security.showConfigModal = false" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+                </div>
+                <p class="text-xs text-gray-400">Writes atomically with LF line endings to `CYRENUS_TETRAGON_CONFIG` (`/etc/tetragon/tetragon.yaml`) and restarts the Tetragon unit when systemd is active.</p>
+                <div>
+                    <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Configuration YAML</label>
+                    <textarea x-model="security.tetragonConfigContent" rows="16"
+                        class="w-full bg-black/60 border border-gray-700 rounded-lg p-3 text-xs font-mono text-cyan-200 focus:outline-none focus:border-cyan-500"></textarea>
+                </div>
+                <div class="flex justify-end gap-2">
+                    <button @click="security.showConfigModal = false"
+                        class="bg-gray-800 hover:bg-gray-700 text-gray-200 px-4 py-2 rounded-lg text-sm font-semibold">Cancel</button>
+                    <button @click="saveTetragonConfig()" :disabled="security.savingConfig"
+                        class="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-white px-5 py-2 rounded-lg text-sm font-bold">
+                        <span x-text="security.savingConfig ? 'Saving...' : 'Save Agent Config'"></span>
+                    </button>
                 </div>
             </div>
         </div>
