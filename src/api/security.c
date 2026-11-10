@@ -6,8 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
+#include <stdatomic.h>
 #include <time.h>
 #include <errno.h>
+#include <pthread.h>
 #include <json-c/json.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -17,6 +20,27 @@
 
 // External global database
 extern struct database *g_db;
+
+static pthread_mutex_t g_sec_stats_mutex = PTHREAD_MUTEX_INITIALIZER;
+static struct {
+    int valid;
+    int total_events;
+    int critical_alerts;
+    int events_blocked;
+    uint64_t cached_ms;
+    uint64_t cached_gen;
+} g_sec_stats_cache = {0};
+static _Atomic uint64_t g_sec_stats_gen = 1;
+
+void api_security_invalidate_stats_cache(void) {
+    atomic_fetch_add_explicit(&g_sec_stats_gen, 1, memory_order_relaxed);
+}
+
+static uint64_t sec_monotonic_ms_now(void) {
+    struct timespec ts = {0};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
+}
 
 #define DEFAULT_DEPLOYED_POLICY_DIR "/etc/tetragon/policies"
 #define DEFAULT_TETRAGON_CONFIG_PATH "/etc/tetragon/tetragon.yaml"
@@ -418,37 +442,70 @@ struct MHD_Response *api_security_events_list(struct MHD_Connection *connection,
 struct MHD_Response *api_security_stats(struct MHD_Connection *connection,
                                         const char *method,
                                         const char *url) {
+    (void)url;
     if (strcmp(method, "GET") != 0) {
         return create_response(405, "Method not allowed", "text/plain");
     }
-    
+
     const char *from_str = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "from");
     const char *to_str = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "to");
-    
-    time_t from_val = from_str ? atoll(from_str) : time(NULL) - 86400; // Last 24h default
-    time_t to_val = to_str ? atoll(to_str) : time(NULL);
-    
+    int use_cache = (from_str == NULL && to_str == NULL);
+
+    time_t now_sec = time(NULL);
+    time_t from_val = from_str ? atoll(from_str) : now_sec - 86400; // Last 24h default
+    time_t to_val = to_str ? atoll(to_str) : now_sec;
+
     // Apply same heuristic as events list to ensure DB (nanoseconds) matches query
     if (from_val > 0 && from_val < 3000000000LL) from_val *= 1000000000LL;
     else if (from_val > 0 && from_val < 3000000000000LL) from_val *= 1000000LL;
-    
+
     if (to_val > 0 && to_val < 3000000000LL) to_val *= 1000000000LL;
     else if (to_val > 0 && to_val < 3000000000000LL) to_val *= 1000000LL;
-    
+
     time_t from = from_val;
     time_t to = to_val;
-    
+
     int total_events = 0, critical_alerts = 0, events_blocked = 0;
-    
-    if (database_get_security_stats(g_db, from, to, &total_events, 
-                                     &critical_alerts, &events_blocked) != 0) {
-        return create_json_response(500, "{\"error\":\"Failed to fetch stats\"}");
+
+    if (use_cache) {
+        uint64_t now_ms = sec_monotonic_ms_now();
+        uint64_t cur_gen = atomic_load_explicit(&g_sec_stats_gen, memory_order_acquire);
+
+        pthread_mutex_lock(&g_sec_stats_mutex);
+        if (g_sec_stats_cache.valid &&
+            g_sec_stats_cache.cached_gen == cur_gen &&
+            now_ms >= g_sec_stats_cache.cached_ms &&
+            (now_ms - g_sec_stats_cache.cached_ms) < 2000ULL) {
+            total_events = g_sec_stats_cache.total_events;
+            critical_alerts = g_sec_stats_cache.critical_alerts;
+            events_blocked = g_sec_stats_cache.events_blocked;
+            pthread_mutex_unlock(&g_sec_stats_mutex);
+        } else {
+            uint64_t query_gen = atomic_load_explicit(&g_sec_stats_gen, memory_order_acquire);
+            if (database_get_security_stats(g_db, from, to, &total_events,
+                                            &critical_alerts, &events_blocked) != 0) {
+                pthread_mutex_unlock(&g_sec_stats_mutex);
+                return create_json_response(500, "{\"error\":\"Failed to fetch stats\"}");
+            }
+            g_sec_stats_cache.valid = 1;
+            g_sec_stats_cache.total_events = total_events;
+            g_sec_stats_cache.critical_alerts = critical_alerts;
+            g_sec_stats_cache.events_blocked = events_blocked;
+            g_sec_stats_cache.cached_ms = sec_monotonic_ms_now();
+            g_sec_stats_cache.cached_gen = query_gen;
+            pthread_mutex_unlock(&g_sec_stats_mutex);
+        }
+    } else {
+        if (database_get_security_stats(g_db, from, to, &total_events,
+                                        &critical_alerts, &events_blocked) != 0) {
+            return create_json_response(500, "{\"error\":\"Failed to fetch stats\"}");
+        }
     }
-    
+
     // Get Tetragon runtime stats
     struct tetragon_stats tg_stats;
     tetragon_get_stats(&tg_stats);
-    
+
     struct json_object *response = json_object_new_object();
     json_object_object_add(response, "total_events", json_object_new_int(total_events));
     json_object_object_add(response, "critical_alerts", json_object_new_int(critical_alerts));
@@ -456,10 +513,10 @@ struct MHD_Response *api_security_stats(struct MHD_Connection *connection,
     json_object_object_add(response, "process_exec_events", json_object_new_int64(tg_stats.process_exec_events));
     json_object_object_add(response, "alerts_generated", json_object_new_int64(tg_stats.alerts_generated));
     json_object_object_add(response, "tetragon_running", json_object_new_boolean(tetragon_is_running()));
-    
+
     const char *json_str = json_object_to_json_string(response);
     struct MHD_Response *mhd_response = create_json_response(200, json_str);
-    
+
     json_object_put(response);
     return mhd_response;
 }
@@ -692,59 +749,136 @@ struct MHD_Response *api_security_policy_delete(struct MHD_Connection *connectio
     }
 }
 
+static off_t find_tail_start_offset(int fd, off_t file_size, int lines) {
+    if (file_size <= 0 || lines <= 0) return 0;
+
+    char buf[65536];
+    off_t pos = file_size;
+    int newlines = 0;
+
+    while (pos > 0) {
+        size_t to_read = (pos > (off_t)sizeof(buf)) ? sizeof(buf) : (size_t)pos;
+        off_t chunk_start = pos - (off_t)to_read;
+        size_t total_read = 0;
+
+        while (total_read < to_read) {
+            ssize_t r = pread(fd, buf + total_read, to_read - total_read,
+                              chunk_start + (off_t)total_read);
+            if (r < 0) {
+                if (errno == EINTR) continue;
+                return 0;
+            }
+            if (r == 0) break;
+            total_read += (size_t)r;
+        }
+        if (total_read == 0) break;
+
+        for (ssize_t i = (ssize_t)total_read - 1; i >= 0; i--) {
+            off_t abs_pos = chunk_start + (off_t)i;
+            if (buf[i] == '\n') {
+                if (abs_pos == file_size - 1) {
+                    continue; // Ignore single trailing newline at EOF
+                }
+                newlines++;
+                if (newlines >= lines) {
+                    return abs_pos + 1;
+                }
+            }
+        }
+        pos = chunk_start;
+    }
+
+    return 0;
+}
+
 // API: GET /api/security/logs
-// Stream Tetragon logs (pure C tail without popen)
+// Stream Tetragon logs (pure C reverse tail-seek without popen or full-file scan)
 struct MHD_Response *api_security_logs(struct MHD_Connection *connection,
                                        const char *method,
                                        const char *url) {
+    (void)url;
     if (strcmp(method, "GET") != 0) {
         return create_response(405, "Method not allowed", "text/plain");
     }
-    
+
     const char *lines_str = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "lines");
     int lines = lines_str ? atoi(lines_str) : 100;
     if (lines <= 0) lines = 100;
     if (lines > 5000) lines = 5000;
-    
+
     struct json_object *response = json_object_new_object();
     struct json_object *logs_array = json_object_new_array();
 
-    FILE *fp = fopen(get_tetragon_log_path(), "r");
-    if (fp) {
-        char **ring = calloc((size_t)lines, sizeof(char *));
-        if (ring) {
-            int count = 0;
-            char line[8192];
-            while (fgets(line, sizeof(line), fp)) {
-                int idx = count % lines;
-                free(ring[idx]);
-                ring[idx] = strdup(line);
-                count++;
+    int fd = open(get_tetragon_log_path(), O_RDONLY);
+    if (fd >= 0) {
+        struct stat st;
+        off_t start_offset = 0;
+        if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
+            if (st.st_size <= 0) {
+                close(fd);
+                fd = -1;
+            } else {
+                start_offset = find_tail_start_offset(fd, st.st_size, lines);
             }
-            int start = (count > lines) ? (count - lines) : 0;
-            for (int i = start; i < count; i++) {
-                char *entry = ring[i % lines];
-                if (entry) {
-                    struct json_object *log_obj = json_tokener_parse(entry);
-                    if (log_obj) {
-                        json_object_array_add(logs_array, log_obj);
-                    }
-                }
-            }
-            for (int i = 0; i < lines; i++) {
-                free(ring[i]);
-            }
-            free(ring);
         }
-        fclose(fp);
+
+        if (fd >= 0) {
+            if (start_offset > 0) {
+                if (lseek(fd, start_offset, SEEK_SET) < 0) {
+                    lseek(fd, 0, SEEK_SET);
+                }
+            } else {
+                lseek(fd, 0, SEEK_SET);
+            }
+
+            FILE *fp = fdopen(fd, "rb");
+            if (fp) {
+                char **ring = calloc((size_t)lines, sizeof(char *));
+                if (ring) {
+                    int count = 0;
+                    char *line = NULL;
+                    size_t cap = 0;
+                    ssize_t linelen;
+                    while ((linelen = getline(&line, &cap, fp)) != -1) {
+                        if (linelen <= 0 || line[0] == '\n' ||
+                            (linelen == 2 && line[0] == '\r' && line[1] == '\n')) {
+                            continue;
+                        }
+                        int idx = count % lines;
+                        free(ring[idx]);
+                        ring[idx] = strdup(line);
+                        count++;
+                    }
+                    free(line);
+
+                    int start = (count > lines) ? (count - lines) : 0;
+                    for (int i = start; i < count; i++) {
+                        char *entry = ring[i % lines];
+                        if (entry) {
+                            struct json_object *log_obj = json_tokener_parse(entry);
+                            if (log_obj) {
+                                json_object_array_add(logs_array, log_obj);
+                            }
+                        }
+                    }
+                    for (int i = 0; i < lines; i++) {
+                        free(ring[i]);
+                    }
+                    free(ring);
+                }
+                fclose(fp); // Also closes fd
+            } else {
+                close(fd);
+            }
+        }
     }
-    
+
     json_object_object_add(response, "logs", logs_array);
     json_object_object_add(response, "count", json_object_new_int(json_object_array_length(logs_array)));
-    
+
     const char *json_str = json_object_to_json_string(response);
     struct MHD_Response *mhd_response = create_json_response(200, json_str);
-    
+
     json_object_put(response);
     return mhd_response;
 }

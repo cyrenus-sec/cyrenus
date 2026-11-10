@@ -272,6 +272,27 @@ document.addEventListener('alpine:init', () => {
         let pollTickCounter = 0;
         let trafficAutoTimer: number | null = null;
 
+        let secRefreshTimer: number | null = null;
+        let lastSecRefreshMs = 0;
+        let secNeedEvents = false;
+        let secNeedStats = false;
+        let secNeedCorrelations = false;
+
+        let atkRefreshTimer: number | null = null;
+        let lastAtkRefreshMs = 0;
+        let pendingHiddenSync = false;
+
+        let inFlightSystemStats = false;
+        let inFlightSecStats = false;
+        let inFlightSecEvents = false;
+        let pendingSecEventsExplicit = false;
+        let inFlightSecCorrs = false;
+        let pendingSecCorrsExplicit = false;
+        let inFlightAttacks = false;
+        let pendingAttacksExplicit = false;
+        let inFlightBlocks = false;
+        let visibilityHandler: (() => void) | null = null;
+
         const HISTORY_POINTS = 60;
         const chartLabels: string[] = Array(HISTORY_POINTS).fill('');
         const passedPpsHistory: number[] = Array(HISTORY_POINTS).fill(0);
@@ -488,6 +509,115 @@ document.addEventListener('alpine:init', () => {
                     }
                 }, 3000);
 
+                const flushSecRefresh = () => {
+                    secRefreshTimer = null;
+                    if (document.hidden) {
+                        pendingHiddenSync = true;
+                        return;
+                    }
+                    lastSecRefreshMs = Date.now();
+                    const doEvents = secNeedEvents;
+                    const doStats = secNeedStats;
+                    const doCorrs = secNeedCorrelations;
+                    secNeedEvents = false;
+                    secNeedStats = false;
+                    secNeedCorrelations = false;
+
+                    if (doStats) {
+                        this.fetchSecurityStats(true);
+                    }
+                    if (this.currentPage === 'security') {
+                        if (doEvents) this.fetchSecurityEvents(true);
+                        if (doCorrs) this.fetchSecurityCorrelations(true);
+                    }
+                };
+
+                const scheduleSecurityRefresh = (
+                    opts: { events?: boolean; stats?: boolean; correlations?: boolean },
+                    minIntervalMs = 2000
+                ) => {
+                    if (opts.events) secNeedEvents = true;
+                    if (opts.stats) secNeedStats = true;
+                    if (opts.correlations) secNeedCorrelations = true;
+
+                    if (document.hidden) {
+                        pendingHiddenSync = true;
+                        return;
+                    }
+
+                    const elapsed = Date.now() - lastSecRefreshMs;
+                    if (elapsed >= minIntervalMs) {
+                        if (secRefreshTimer !== null) {
+                            window.clearTimeout(secRefreshTimer);
+                            secRefreshTimer = null;
+                        }
+                        flushSecRefresh();
+                    } else if (secRefreshTimer === null) {
+                        secRefreshTimer = window.setTimeout(flushSecRefresh, minIntervalMs - elapsed);
+                    }
+                };
+
+                const flushAtkRefresh = () => {
+                    atkRefreshTimer = null;
+                    if (document.hidden) {
+                        pendingHiddenSync = true;
+                        return;
+                    }
+                    lastAtkRefreshMs = Date.now();
+                    if (this.currentPage === 'dashboard' || this.currentPage === 'attacks') {
+                        this.fetchAttacks(false, true);
+                        this.fetchBlocks(true);
+                    }
+                    if (this.currentPage === 'dashboard') {
+                        this.fetchSystemStats(true);
+                    }
+                };
+
+                const scheduleAttackRefresh = () => {
+                    if (document.hidden) {
+                        pendingHiddenSync = true;
+                        return;
+                    }
+                    const elapsed = Date.now() - lastAtkRefreshMs;
+                    if (elapsed >= 1500) {
+                        if (atkRefreshTimer !== null) {
+                            window.clearTimeout(atkRefreshTimer);
+                            atkRefreshTimer = null;
+                        }
+                        flushAtkRefresh();
+                    } else if (atkRefreshTimer === null) {
+                        atkRefreshTimer = window.setTimeout(flushAtkRefresh, 1500 - elapsed);
+                    }
+                };
+
+                visibilityHandler = () => {
+                    if (document.hidden) return;
+                    if (pendingHiddenSync) {
+                        pendingHiddenSync = false;
+                        if (this.currentPage === 'dashboard') {
+                            this.fetchSystemStats(true);
+                            this.fetchBlocks(true);
+                            this.fetchAttacks(false, true);
+                            this.syncChartSeries();
+                        } else if (this.currentPage === 'attacks') {
+                            this.fetchBlocks(true);
+                            this.fetchAttacks(false, true);
+                        } else if (this.currentPage === 'security') {
+                            this.fetchSecurityStats(true);
+                            this.fetchSecurityEvents(true);
+                            this.fetchSecurityCorrelations(true);
+                        } else if (this.currentPage === 'traffic' && this.trafficAutoRefresh) {
+                            this.fetchTraffic();
+                        }
+                        secNeedEvents = false;
+                        secNeedStats = false;
+                        secNeedCorrelations = false;
+                    } else if (this.currentPage === 'dashboard') {
+                        this.syncChartSeries();
+                    }
+                };
+                document.addEventListener('visibilitychange', visibilityHandler);
+
                 window.addEventListener('ws-status', (e: Event) => {
                     const detail = (e as CustomEvent).detail || {};
                     this.wsConnected = Boolean(detail.connected);
@@ -521,14 +651,16 @@ document.addEventListener('alpine:init', () => {
                         this.pushChartPoint(passedPps, droppedPps, passedBps, droppedBps, Number(d.timestamp) || 0);
 
                         pollTickCounter++;
-                        if (pollTickCounter % 5 === 0 && !document.hidden) {
-                            if (this.currentPage === 'dashboard') {
-                                this.fetchSystemStats();
-                                this.fetchBlocks();
-                                this.fetchAttacks(false);
+                        if (pollTickCounter % 5 === 0) {
+                            if (document.hidden) {
+                                pendingHiddenSync = true;
+                            } else if (this.currentPage === 'dashboard') {
+                                this.fetchSystemStats(true);
+                                this.fetchBlocks(true);
+                                this.fetchAttacks(false, true);
                             } else if (this.currentPage === 'attacks') {
-                                this.fetchBlocks();
-                                this.fetchAttacks(false);
+                                this.fetchBlocks(true);
+                                this.fetchAttacks(false, true);
                             }
                         }
                     } else if (msg.type === 'attack_alert' && msg.data) {
@@ -538,27 +670,27 @@ document.addEventListener('alpine:init', () => {
                             `${a.attack_type || 'Attack'} ${statusWord} from ${a.src_ip} (${this.formatNumber(a.peak_pps || 0)} PPS)`,
                             'error'
                         );
-                        this.fetchAttacks(false);
-                        this.fetchBlocks();
-                        this.fetchSystemStats();
+                        scheduleAttackRefresh();
                     } else if (msg.type === 'security_update') {
                         if (this.currentPage === 'security') {
-                            this.fetchSecurityEvents();
-                            this.fetchSecurityStats();
+                            scheduleSecurityRefresh({ events: true, stats: true }, 2000);
                         }
                     } else if (msg.type === 'security_alert') {
                         this.notify(`Host Security Alert: ${msg.message || 'Policy triggered'}`, 'error');
-                        this.fetchSecurityStats();
-                        if (this.currentPage === 'security') {
-                            this.fetchSecurityEvents();
-                            this.fetchSecurityCorrelations();
-                        }
+                        scheduleSecurityRefresh(
+                            {
+                                stats: true,
+                                events: this.currentPage === 'security',
+                                correlations: this.currentPage === 'security'
+                            },
+                            500
+                        );
                     } else if (msg.type === 'correlation_alert' && msg.data) {
                         const c = msg.data;
                         const conf = Math.round((Number(c.confidence_score) || 0) * 100);
                         this.notify(`Correlated Threat (${conf}%): ${c.attack_type || 'Intrusion'} — ${c.source_ip || 'host'}`, 'error');
                         if (this.currentPage === 'security') {
-                            this.fetchSecurityCorrelations();
+                            scheduleSecurityRefresh({ correlations: true }, 500);
                         }
                     }
                 });
@@ -594,6 +726,18 @@ document.addEventListener('alpine:init', () => {
                         window.clearInterval(trafficAutoTimer);
                         trafficAutoTimer = null;
                     }
+                    if (secRefreshTimer !== null) {
+                        window.clearTimeout(secRefreshTimer);
+                        secRefreshTimer = null;
+                    }
+                    if (atkRefreshTimer !== null) {
+                        window.clearTimeout(atkRefreshTimer);
+                        atkRefreshTimer = null;
+                    }
+                    if (visibilityHandler !== null) {
+                        document.removeEventListener('visibilitychange', visibilityHandler);
+                        visibilityHandler = null;
+                    }
                     wsClient.close();
                     window.location.replace('/login.html');
                 }
@@ -607,6 +751,7 @@ document.addEventListener('alpine:init', () => {
                     this.fetchBlocks();
                     this.fetchAttacks(true);
                     window.setTimeout(() => {
+                        this.syncChartSeries();
                         if (chartInstance) {
                             chartInstance.resize();
                             chartInstance.update('none');
@@ -661,7 +806,9 @@ document.addEventListener('alpine:init', () => {
             },
 
             // --- System Stats & Settings ---
-            async fetchSystemStats() {
+            async fetchSystemStats(fromBg = false) {
+                if (fromBg && inFlightSystemStats) return;
+                inFlightSystemStats = true;
                 try {
                     const res = await this.apiFetch('/api/v1/system/stats');
                     if (!res.ok) return;
@@ -688,6 +835,8 @@ document.addEventListener('alpine:init', () => {
                     }
                 } catch (e) {
                     console.error('Fetch system stats failed', e);
+                } finally {
+                    inFlightSystemStats = false;
                 }
             },
 
@@ -859,8 +1008,13 @@ document.addEventListener('alpine:init', () => {
             },
 
             // --- Attacks & Active Auto-Blocks ---
-            async fetchAttacks(resetOffset = false) {
+            async fetchAttacks(resetOffset = false, fromBg = false) {
                 if (resetOffset) this.attacksOffset = 0;
+                if (inFlightAttacks) {
+                    if (!fromBg) pendingAttacksExplicit = true;
+                    return;
+                }
+                inFlightAttacks = true;
                 try {
                     const params = new URLSearchParams();
                     params.set('limit', String(this.attacksLimit));
@@ -898,6 +1052,12 @@ document.addEventListener('alpine:init', () => {
                     }
                 } catch (e) {
                     console.error('Fetch attacks failed', e);
+                } finally {
+                    inFlightAttacks = false;
+                    if (pendingAttacksExplicit) {
+                        pendingAttacksExplicit = false;
+                        void this.fetchAttacks(false, false);
+                    }
                 }
             },
 
@@ -956,7 +1116,9 @@ document.addEventListener('alpine:init', () => {
                 }
             },
 
-            async fetchBlocks() {
+            async fetchBlocks(fromBg = false) {
+                if (fromBg && inFlightBlocks) return;
+                inFlightBlocks = true;
                 try {
                     const res = await this.apiFetch('/api/v1/blocks');
                     if (!res.ok) return;
@@ -965,6 +1127,8 @@ document.addEventListener('alpine:init', () => {
                     this.stats.active_blocks = this.blocks.length;
                 } catch (e) {
                     console.error('Fetch blocks failed', e);
+                } finally {
+                    inFlightBlocks = false;
                 }
             },
 
@@ -1285,17 +1449,26 @@ document.addEventListener('alpine:init', () => {
                 );
             },
 
-            async fetchSecurityStats() {
+            async fetchSecurityStats(fromBg = false) {
+                if (fromBg && inFlightSecStats) return;
+                inFlightSecStats = true;
                 try {
                     const res = await this.apiFetch('/api/v1/security/stats');
                     if (!res.ok) return;
                     this.security.stats = await res.json();
                 } catch (e) {
                     console.error('Security stats failed', e);
+                } finally {
+                    inFlightSecStats = false;
                 }
             },
 
-            async fetchSecurityEvents() {
+            async fetchSecurityEvents(fromBg = false) {
+                if (inFlightSecEvents) {
+                    if (!fromBg) pendingSecEventsExplicit = true;
+                    return;
+                }
+                inFlightSecEvents = true;
                 try {
                     const params = new URLSearchParams();
                     params.set('limit', String(this.security.filters.limit));
@@ -1308,6 +1481,12 @@ document.addEventListener('alpine:init', () => {
                     this.security.events = data.events || [];
                 } catch (e) {
                     console.error('Security events failed', e);
+                } finally {
+                    inFlightSecEvents = false;
+                    if (pendingSecEventsExplicit) {
+                        pendingSecEventsExplicit = false;
+                        void this.fetchSecurityEvents(false);
+                    }
                 }
             },
 
@@ -1333,7 +1512,12 @@ document.addEventListener('alpine:init', () => {
                 }
             },
 
-            async fetchSecurityCorrelations() {
+            async fetchSecurityCorrelations(fromBg = false) {
+                if (inFlightSecCorrs) {
+                    if (!fromBg) pendingSecCorrsExplicit = true;
+                    return;
+                }
+                inFlightSecCorrs = true;
                 try {
                     const minConf = Number(this.security.corrMinConfidence) || 0;
                     const res = await this.apiFetch(`/api/v1/security/correlations?min_confidence=${encodeURIComponent(String(minConf))}&limit=100`);
@@ -1342,6 +1526,12 @@ document.addEventListener('alpine:init', () => {
                     this.security.correlations = Array.isArray(data.correlations) ? data.correlations : [];
                 } catch (e) {
                     console.error('Security correlations failed', e);
+                } finally {
+                    inFlightSecCorrs = false;
+                    if (pendingSecCorrsExplicit) {
+                        pendingSecCorrsExplicit = false;
+                        void this.fetchSecurityCorrelations(false);
+                    }
                 }
             },
 
@@ -1631,6 +1821,9 @@ document.addEventListener('alpine:init', () => {
 
             syncChartSeries() {
                 if (!chartInstance) return;
+                const canvas = chartInstance.canvas;
+                if (document.hidden || !canvas.isConnected || canvas.offsetParent === null) return;
+
                 const useMbps = this.chartMode === 'mbps';
                 chartInstance.data.labels = [...chartLabels];
                 chartInstance.data.datasets[0].label = useMbps ? 'Allowed (Mbps)' : 'Allowed (PPS)';
@@ -1640,10 +1833,7 @@ document.addEventListener('alpine:init', () => {
                 const yScale = chartInstance.options.scales?.y as { suggestedMax?: number } | undefined;
                 if (yScale) yScale.suggestedMax = useMbps ? 1 : 100;
 
-                const canvas = chartInstance.canvas;
-                if (!document.hidden && canvas.isConnected && canvas.offsetParent !== null) {
-                    chartInstance.update('none');
-                }
+                chartInstance.update('none');
             },
 
             pushChartPoint(passedPps: number, droppedPps: number, passedBps: number, droppedBps: number, unixTs: number) {

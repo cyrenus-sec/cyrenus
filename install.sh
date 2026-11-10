@@ -72,6 +72,16 @@ install_dependencies() {
     case $OS in
         ubuntu|debian)
             apt-get update
+            local node_pkgs=()
+            if ! command_exists node || ! command_exists npm; then
+                node_pkgs=(nodejs)
+                local node_candidate
+                node_candidate=$(LC_ALL=C apt-cache policy nodejs 2>/dev/null | awk '/Candidate:/ {print $2}' || true)
+                if [ -z "$node_candidate" ] || [ "$node_candidate" = "(none)" ] || \
+                   ! LC_ALL=C apt-cache show "nodejs=${node_candidate}" 2>/dev/null | grep -Eq '^(Provides|Conflicts):.*[ ,]npm([ ,(:]|$)'; then
+                    node_pkgs+=(npm)
+                fi
+            fi
             apt-get install -y \
                 build-essential \
                 clang \
@@ -92,8 +102,7 @@ install_dependencies() {
                 git \
                 curl \
                 xxd \
-                nodejs \
-                npm
+                "${node_pkgs[@]}"
             ;;
         fedora|rhel|centos)
             dnf install -y \

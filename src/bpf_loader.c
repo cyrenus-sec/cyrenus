@@ -13,7 +13,59 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
+#if defined(__has_include)
+#  if __has_include(<bpf/libbpf_version.h>)
+#    include <bpf/libbpf_version.h>
+#  endif
+#endif
+
+#if defined(LIBBPF_MAJOR_VERSION) && \
+    (LIBBPF_MAJOR_VERSION > 0 || (LIBBPF_MAJOR_VERSION == 0 && LIBBPF_MINOR_VERSION >= 7))
+#  define CYRENUS_HAVE_LIBBPF_XDP_API 1
+#else
+#  define CYRENUS_HAVE_LIBBPF_XDP_API 0
+#endif
+
 static struct bpf_object *obj = NULL;
+
+static int cyrenus_xdp_attach(int ifindex, int prog_fd, unsigned int flags) {
+#if CYRENUS_HAVE_LIBBPF_XDP_API
+    return bpf_xdp_attach(ifindex, prog_fd, flags, NULL);
+#else
+    return bpf_set_link_xdp_fd(ifindex, prog_fd, flags);
+#endif
+}
+
+static int cyrenus_xdp_detach(int ifindex, unsigned int flags) {
+#if CYRENUS_HAVE_LIBBPF_XDP_API
+    return bpf_xdp_detach(ifindex, flags, NULL);
+#else
+    return bpf_set_link_xdp_fd(ifindex, -1, flags);
+#endif
+}
+
+static int cyrenus_xdp_query(int ifindex, unsigned int *attach_mode, unsigned int *prog_id) {
+#if CYRENUS_HAVE_LIBBPF_XDP_API
+    struct bpf_xdp_query_opts qopts;
+    memset(&qopts, 0, sizeof(qopts));
+    qopts.sz = sizeof(qopts);
+    int err = bpf_xdp_query(ifindex, 0, &qopts);
+    if (err == 0) {
+        if (attach_mode) *attach_mode = qopts.attach_mode;
+        if (prog_id) *prog_id = qopts.prog_id;
+    }
+    return err;
+#else
+    struct xdp_link_info linfo;
+    memset(&linfo, 0, sizeof(linfo));
+    int err = bpf_get_link_xdp_info(ifindex, &linfo, sizeof(linfo), 0);
+    if (err == 0) {
+        if (attach_mode) *attach_mode = linfo.attach_mode;
+        if (prog_id) *prog_id = linfo.prog_id;
+    }
+    return err;
+#endif
+}
 
 static void init_invalid_fds(struct map_fds *fds) {
     fds->rules_fd = -1;
@@ -88,16 +140,17 @@ int load_bpf_program(const char *filename, const char *interface,
         return -1;
     }
 
-    struct bpf_xdp_query_opts qopts = { .sz = sizeof(qopts) };
-    if (bpf_xdp_query(ifindex, 0, &qopts) == 0 && qopts.attach_mode != XDP_ATTACHED_NONE) {
-        if (bpf_xdp_detach(ifindex, 0, NULL) < 0) {
+    unsigned int attach_mode = XDP_ATTACHED_NONE;
+    unsigned int prog_id = 0;
+    if (cyrenus_xdp_query(ifindex, &attach_mode, &prog_id) == 0 && attach_mode != XDP_ATTACHED_NONE) {
+        if (cyrenus_xdp_detach(ifindex, 0) < 0) {
             fprintf(stderr, "WARNING: failed to detach existing XDP program from '%s'\n", interface);
         }
     }
 
-    int attach_err = bpf_xdp_attach(ifindex, prog_fd, XDP_FLAGS_UPDATE_IF_NOEXIST | XDP_FLAGS_DRV_MODE, NULL);
+    int attach_err = cyrenus_xdp_attach(ifindex, prog_fd, XDP_FLAGS_UPDATE_IF_NOEXIST | XDP_FLAGS_DRV_MODE);
     if (attach_err < 0) {
-        attach_err = bpf_xdp_attach(ifindex, prog_fd, XDP_FLAGS_UPDATE_IF_NOEXIST | XDP_FLAGS_SKB_MODE, NULL);
+        attach_err = cyrenus_xdp_attach(ifindex, prog_fd, XDP_FLAGS_UPDATE_IF_NOEXIST | XDP_FLAGS_SKB_MODE);
     }
     if (attach_err < 0) {
         fprintf(stderr, "ERROR: attaching XDP program to interface '%s' failed: %s\n", interface, strerror(-attach_err));
@@ -106,13 +159,13 @@ int load_bpf_program(const char *filename, const char *interface,
         return -1;
     }
 
-    memset(&qopts, 0, sizeof(qopts));
-    qopts.sz = sizeof(qopts);
-    if (bpf_xdp_query(ifindex, 0, &qopts) == 0) {
-        const char *mode_str = (qopts.attach_mode == XDP_ATTACHED_SKB) ? "SKB (generic)" :
-                               (qopts.attach_mode == XDP_ATTACHED_DRV) ? "Native (DRV)" :
-                               (qopts.attach_mode == XDP_ATTACHED_HW) ? "Hardware (HW)" : "Unknown";
-        printf("XDP program attached successfully. Mode: %s (prog_id=%u)\n", mode_str, qopts.prog_id);
+    attach_mode = XDP_ATTACHED_NONE;
+    prog_id = 0;
+    if (cyrenus_xdp_query(ifindex, &attach_mode, &prog_id) == 0) {
+        const char *mode_str = (attach_mode == XDP_ATTACHED_SKB) ? "SKB (generic)" :
+                               (attach_mode == XDP_ATTACHED_DRV) ? "Native (DRV)" :
+                               (attach_mode == XDP_ATTACHED_HW) ? "Hardware (HW)" : "Unknown";
+        printf("XDP program attached successfully. Mode: %s (prog_id=%u)\n", mode_str, prog_id);
         if (xdp_mode_out && xdp_mode_out_len > 0) {
             snprintf(xdp_mode_out, xdp_mode_out_len, "%s", mode_str);
         }
@@ -178,7 +231,7 @@ int load_bpf_program(const char *filename, const char *interface,
     return 0;
 
 err_close:
-    bpf_xdp_detach(ifindex, 0, NULL);
+    cyrenus_xdp_detach(ifindex, 0);
     bpf_object__close(obj);
     obj = NULL;
     init_invalid_fds(fds);
@@ -190,9 +243,9 @@ void unload_bpf_program(const char *interface) {
     if (ifindex == 0) {
         fprintf(stderr, "Failed to get interface index: %s\n", interface);
     } else {
-        if (bpf_xdp_detach(ifindex, 0, NULL) < 0) {
-            if (bpf_xdp_detach(ifindex, XDP_FLAGS_SKB_MODE, NULL) < 0 &&
-                bpf_xdp_detach(ifindex, XDP_FLAGS_DRV_MODE, NULL) < 0) {
+        if (cyrenus_xdp_detach(ifindex, 0) < 0) {
+            if (cyrenus_xdp_detach(ifindex, XDP_FLAGS_SKB_MODE) < 0 &&
+                cyrenus_xdp_detach(ifindex, XDP_FLAGS_DRV_MODE) < 0) {
                 fprintf(stderr, "Failed to detach XDP program from interface: %s\n", interface);
             } else {
                 printf("Successfully detached XDP program from interface: %s\n", interface);

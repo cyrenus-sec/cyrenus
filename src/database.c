@@ -171,9 +171,11 @@ int database_open(struct database *db) {
         return -1;
     }
 
-    // Enable WAL mode for better concurrency
+    // Enable WAL mode and expand SQLCipher page cache for faster analytical queries
     run_sql(db->db, "PRAGMA journal_mode=WAL;");
     run_sql(db->db, "PRAGMA synchronous=NORMAL;");
+    run_sql(db->db, "PRAGMA cache_size=-16384;");
+    run_sql(db->db, "PRAGMA temp_store=MEMORY;");
     run_sql(db->db, "PRAGMA foreign_keys=ON;");
 
     db->is_open = true;
@@ -323,8 +325,10 @@ int database_create_schema(struct database *db) {
         ");"
 
         "CREATE INDEX IF NOT EXISTS idx_security_timestamp ON security_events(timestamp);"
+        "CREATE INDEX IF NOT EXISTS idx_security_ts_sev_act ON security_events(timestamp, severity, action);"
         "CREATE INDEX IF NOT EXISTS idx_security_severity ON security_events(severity);"
         "CREATE INDEX IF NOT EXISTS idx_security_type ON security_events(event_type);"
+        "CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);"
 
         "CREATE TABLE IF NOT EXISTS attack_correlation ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -362,6 +366,8 @@ int database_create_schema(struct database *db) {
     run_sql(db->db, "CREATE INDEX IF NOT EXISTS idx_iplists_type ON ip_lists(list_type);");
     run_sql(db->db, "CREATE INDEX IF NOT EXISTS idx_corr_timestamp ON attack_correlation(timestamp);");
     run_sql(db->db, "CREATE INDEX IF NOT EXISTS idx_corr_ip_type ON attack_correlation(source_ip, attack_type, timestamp);");
+    run_sql(db->db, "CREATE INDEX IF NOT EXISTS idx_security_ts_sev_act ON security_events(timestamp, severity, action);");
+    run_sql(db->db, "CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);");
 
     db_unlock(db);
     return 0;
@@ -1915,6 +1921,88 @@ int database_delete_old_security_events(struct database *db, time_t older_than) 
     sqlite3_finalize(stmt);
     db_unlock(db);
     return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+static int prune_sec_events_range(sqlite3 *sdb, int alert_only,
+                                  int64_t ts_lo, int64_t ts_hi, int limit) {
+    if (limit <= 0 || ts_hi <= ts_lo) return 0;
+    const char *sql = alert_only
+        ? "DELETE FROM security_events WHERE id IN ("
+          "  SELECT id FROM security_events "
+          "  WHERE timestamp >= ?1 AND timestamp < ?2 AND severity >= 2 "
+          "  LIMIT ?3"
+          ");"
+        : "DELETE FROM security_events WHERE id IN ("
+          "  SELECT id FROM security_events "
+          "  WHERE timestamp >= ?1 AND timestamp < ?2 AND severity < 2 "
+          "  LIMIT ?3"
+          ");";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(sdb, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return 0;
+    }
+    sqlite3_bind_int64(stmt, 1, ts_lo);
+    sqlite3_bind_int64(stmt, 2, ts_hi);
+    sqlite3_bind_int(stmt, 3, limit);
+    int changed = 0;
+    if (sqlite3_step(stmt) == SQLITE_DONE) {
+        changed = sqlite3_changes(sdb);
+    }
+    sqlite3_finalize(stmt);
+    return changed;
+}
+
+static int prune_sec_events_tier(sqlite3 *sdb, int alert_only,
+                                 time_t now, int retention_sec, int batch_limit) {
+    if (retention_sec <= 0 || now <= retention_sec || batch_limit <= 0) return 0;
+
+    int64_t cutoff_sec = (int64_t)(now - retention_sec);
+    int64_t cutoff_ms = cutoff_sec * 1000LL;
+    int64_t cutoff_ns = cutoff_sec * 1000000000LL;
+    int rem = batch_limit;
+    int deleted = 0;
+
+    int n = prune_sec_events_range(sdb, alert_only, 3000000000000LL, cutoff_ns, rem);
+    deleted += n;
+    rem -= n;
+
+    if (rem > 0) {
+        int64_t ms_hi = (cutoff_ms < 3000000000000LL) ? cutoff_ms : 3000000000000LL;
+        n = prune_sec_events_range(sdb, alert_only, 3000000000LL, ms_hi, rem);
+        deleted += n;
+        rem -= n;
+    }
+
+    if (rem > 0) {
+        int64_t sec_hi = (cutoff_sec < 3000000000LL) ? cutoff_sec : 3000000000LL;
+        n = prune_sec_events_range(sdb, alert_only, INT64_MIN, sec_hi, rem);
+        deleted += n;
+    }
+
+    return deleted;
+}
+
+int database_prune_security_events(struct database *db, int info_retention_sec,
+                                   int alert_retention_sec, int batch_limit) {
+    if (!db || !db->is_open) return -1;
+    if (batch_limit <= 0) batch_limit = 5000;
+
+    time_t now = time(NULL);
+    int deleted_total = 0;
+
+    db_lock(db);
+    deleted_total += prune_sec_events_tier(db->db, 0, now, info_retention_sec, batch_limit);
+    deleted_total += prune_sec_events_tier(db->db, 1, now, alert_retention_sec, batch_limit);
+    db_unlock(db);
+
+    return deleted_total;
+}
+
+void database_checkpoint_wal(struct database *db) {
+    if (!db || !db->is_open) return;
+    db_lock(db);
+    sqlite3_wal_checkpoint_v2(db->db, NULL, SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
+    db_unlock(db);
 }
 
 int database_insert_attack_correlation(struct database *db,

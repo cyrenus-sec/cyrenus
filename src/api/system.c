@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <pthread.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <bpf/bpf.h>
@@ -13,6 +14,8 @@
 #ifndef CLOCK_BOOTTIME
 #define CLOCK_BOOTTIME CLOCK_MONOTONIC
 #endif
+
+static pthread_mutex_t g_settings_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Handler: GET /api/v1/system/health
 enum MHD_Result api_system_health(struct MHD_Connection *connection,
@@ -204,6 +207,7 @@ enum MHD_Result api_system_get_settings(struct MHD_Connection *connection,
     json_object *j_settings = json_object_new_object();
 
     if (ctx && ctx->config) {
+        pthread_mutex_lock(&g_settings_mutex);
         json_object_object_add(j_settings, "interface", json_object_new_string(ctx->config->interface));
         json_object_object_add(j_settings, "xdp_mode", json_object_new_string(ctx->config->xdp_mode));
         json_object_object_add(j_settings, "dry_run", json_object_new_boolean(ctx->config->dry_run));
@@ -227,6 +231,7 @@ enum MHD_Result api_system_get_settings(struct MHD_Connection *connection,
         json_object_object_add(j_settings, "rst_flood_rate", json_object_new_int64((int64_t)ctx->config->rst_flood_rate));
         json_object_object_add(j_settings, "ack_flood_rate", json_object_new_int64((int64_t)ctx->config->ack_flood_rate));
         json_object_object_add(j_settings, "synack_flood_rate", json_object_new_int64((int64_t)ctx->config->synack_flood_rate));
+        pthread_mutex_unlock(&g_settings_mutex);
     }
 
     const char *json_str = json_object_to_json_string(j_settings);
@@ -255,7 +260,9 @@ enum MHD_Result api_system_update_settings(struct MHD_Connection *connection,
         return api_send_error(connection, MHD_HTTP_BAD_REQUEST, "Invalid JSON");
     }
 
+    pthread_mutex_lock(&g_settings_mutex);
     struct runtime_config next = *ctx->config;
+    pthread_mutex_unlock(&g_settings_mutex);
     struct json_object *j_val = NULL;
 
     if (json_object_object_get_ex(root, "syn_flood_rate", &j_val)) {
@@ -326,7 +333,20 @@ enum MHD_Result api_system_update_settings(struct MHD_Connection *connection,
         next.synack_flood_rate = (uint32_t)v;
     }
 
-    *ctx->config = next;
+    pthread_mutex_lock(&g_settings_mutex);
+    ctx->config->syn_flood_rate = next.syn_flood_rate;
+    ctx->config->udp_flood_rate = next.udp_flood_rate;
+    ctx->config->icmp_flood_rate = next.icmp_flood_rate;
+    ctx->config->dns_amp_rate = next.dns_amp_rate;
+    ctx->config->max_frags = next.max_frags;
+    ctx->config->auto_block_enabled = next.auto_block_enabled;
+    ctx->config->auto_block_duration_sec = next.auto_block_duration_sec;
+    ctx->config->global_syn_rate = next.global_syn_rate;
+    ctx->config->global_udp_rate = next.global_udp_rate;
+    ctx->config->max_dns_response_size = next.max_dns_response_size;
+    ctx->config->rst_flood_rate = next.rst_flood_rate;
+    ctx->config->ack_flood_rate = next.ack_flood_rate;
+    ctx->config->synack_flood_rate = next.synack_flood_rate;
 
     // Persist to SQLite config table so thresholds survive restarts
     if (ctx->db && ctx->db->is_open) {
@@ -351,10 +371,12 @@ enum MHD_Result api_system_update_settings(struct MHD_Connection *connection,
         runtime_config_to_bpf_cfg(ctx->config, &cfg);
         uint32_t key = 0;
         if (bpf_map_update_elem(ctx->fds->config_map_fd, &key, &cfg, BPF_ANY) != 0) {
+            pthread_mutex_unlock(&g_settings_mutex);
             json_object_put(root);
             return api_send_error(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Failed to update BPF config map");
         }
     }
+    pthread_mutex_unlock(&g_settings_mutex);
 
     json_object_put(root);
     return api_send_json(connection, MHD_HTTP_OK, "{\"status\":\"settings updated\"}");

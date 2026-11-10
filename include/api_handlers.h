@@ -127,6 +127,7 @@ enum MHD_Result api_keys_delete(struct MHD_Connection *connection, struct api_co
 struct MHD_Response *create_response(int status_code, const char *content, const char *content_type);
 struct MHD_Response *create_json_response(int status_code, const char *json);
 int api_security_last_status(void);
+void api_security_invalidate_stats_cache(void);
 
 struct MHD_Response *api_security_events_list(struct MHD_Connection *connection, const char *method, const char *url);
 struct MHD_Response *api_security_stats(struct MHD_Connection *connection, const char *method, const char *url);

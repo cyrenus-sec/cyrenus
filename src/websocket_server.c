@@ -19,7 +19,7 @@ static char ws_bind_iface[IFNAMSIZ] = {0};
 static volatile int interrupted = 0;
 
 #define MAX_MSG_LEN 4096
-#define WS_QUEUE_SIZE 32
+#define WS_QUEUE_SIZE 256
 
 static char msg_queue[WS_QUEUE_SIZE][MAX_MSG_LEN];
 static uint64_t next_seq = 1;

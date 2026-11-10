@@ -491,6 +491,19 @@ void *monitor_thread(void *arg) {
         if ((loop_tick % 5 == 0) && ctx->db && ctx->db->is_open) {
             database_finalize_stale_attacks(ctx->db, now_unix - 30);
         }
+
+        // Periodic DB retention & WAL maintenance (~1m prune / ~5m passive checkpoint)
+        if (ctx->db && ctx->db->is_open) {
+            if (loop_tick % 60 == 5) {
+                database_delete_expired_sessions(ctx->db);
+                if (database_prune_security_events(ctx->db, 26 * 3600, 30 * 86400, 10000) > 0) {
+                    api_security_invalidate_stats_cache();
+                }
+            }
+            if (loop_tick > 0 && loop_tick % 300 == 0) {
+                database_checkpoint_wal(ctx->db);
+            }
+        }
         loop_tick++;
 
         char msg[1024];

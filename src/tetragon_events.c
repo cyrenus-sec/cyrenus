@@ -1,5 +1,6 @@
 #define _DEFAULT_SOURCE
 #include "tetragon_events.h"
+#include "api_handlers.h"
 #include "database.h"
 #include "websocket_server.h"
 #include <stdio.h>
@@ -29,6 +30,47 @@ static struct {
     struct tetragon_stats stats;
     pthread_mutex_t stats_mutex;
 } tetragon_state = { .inotify_fd = -1, .watch_fd = -1 };
+
+static pthread_mutex_t g_ws_coalesce_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_last_sec_ws_update_ms = 0;
+static int g_pending_sec_ws_update = 0;
+
+static pthread_mutex_t g_tg_running_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_tg_running_checked_ms = 0;
+static int g_tg_running_cached = 0;
+static pid_t g_tg_cached_pid = 0;
+
+static uint64_t monotonic_ms_now(void) {
+    struct timespec ts = {0};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
+}
+
+static void flush_pending_security_ws_update(int force) {
+    uint64_t now_ms = monotonic_ms_now();
+    int should_send = 0;
+
+    pthread_mutex_lock(&g_ws_coalesce_mutex);
+    if (g_pending_sec_ws_update &&
+        (force || g_last_sec_ws_update_ms == 0 || (now_ms - g_last_sec_ws_update_ms) >= 2000ULL)) {
+        g_pending_sec_ws_update = 0;
+        g_last_sec_ws_update_ms = now_ms;
+        should_send = 1;
+    }
+    pthread_mutex_unlock(&g_ws_coalesce_mutex);
+
+    if (should_send) {
+        api_security_invalidate_stats_cache();
+        ws_broadcast_message("{\"type\":\"security_update\"}");
+    }
+}
+
+static void queue_security_ws_update(void) {
+    pthread_mutex_lock(&g_ws_coalesce_mutex);
+    g_pending_sec_ws_update = 1;
+    pthread_mutex_unlock(&g_ws_coalesce_mutex);
+    flush_pending_security_ws_update(0);
+}
 
 static void safe_copy_json_str(struct json_object *obj, char *dst, size_t dst_size) {
     if (!obj || !dst || dst_size == 0) return;
@@ -207,8 +249,79 @@ int tetragon_init(const char *log_file_path) {
     return 0;
 }
 
+static int pid_is_tetragon(const char *pid_str) {
+    if (!pid_str || !pid_str[0]) return 0;
+
+    char path[300];
+    snprintf(path, sizeof(path), "/proc/%s/comm", pid_str);
+    FILE *fp = fopen(path, "r");
+    if (fp) {
+        char comm[64] = {0};
+        if (fgets(comm, sizeof(comm), fp)) {
+            comm[strcspn(comm, "\r\n")] = '\0';
+            if (strcmp(comm, "tetragon") == 0 || strncmp(comm, "tetragon-", 9) == 0) {
+                fclose(fp);
+                return 1;
+            }
+        }
+        fclose(fp);
+    }
+
+    snprintf(path, sizeof(path), "/proc/%s/cmdline", pid_str);
+    fp = fopen(path, "rb");
+    if (fp) {
+        char cmd[256] = {0};
+        size_t n = fread(cmd, 1, sizeof(cmd) - 1, fp);
+        fclose(fp);
+        if (n > 0 && mem_contains(cmd, n, "tetragon")) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Check if Tetragon is running without shelling out to systemctl
 int tetragon_is_running(void) {
+    uint64_t now_ms = monotonic_ms_now();
+
+    pthread_mutex_lock(&g_tg_running_mutex);
+
+    if (g_tg_running_checked_ms != 0 &&
+        now_ms >= g_tg_running_checked_ms &&
+        (now_ms - g_tg_running_checked_ms) < 5000ULL) {
+        if (g_tg_running_cached == 0) {
+            pthread_mutex_unlock(&g_tg_running_mutex);
+            return 0;
+        }
+        if (g_tg_cached_pid > 1 &&
+            (kill(g_tg_cached_pid, 0) == 0 || errno == EPERM)) {
+            pthread_mutex_unlock(&g_tg_running_mutex);
+            return 1;
+        }
+    }
+
+    // 1. Fast path: check PID file first and verify process identity in /proc/<pid>
+    FILE *pidfp = fopen("/var/run/tetragon/tetragon.pid", "r");
+    if (pidfp) {
+        long pid = 0;
+        int parsed = (fscanf(pidfp, "%ld", &pid) == 1);
+        fclose(pidfp);
+        if (parsed && pid > 1 && (kill((pid_t)pid, 0) == 0 || errno == EPERM)) {
+            char pid_buf[32];
+            snprintf(pid_buf, sizeof(pid_buf), "%ld", pid);
+            if (pid_is_tetragon(pid_buf)) {
+                g_tg_running_cached = 1;
+                g_tg_cached_pid = (pid_t)pid;
+                g_tg_running_checked_ms = monotonic_ms_now();
+                pthread_mutex_unlock(&g_tg_running_mutex);
+                return 1;
+            }
+        }
+    }
+
+    // 2. Fallback: scan /proc if PID file is missing or stale
+    int found = 0;
+    pid_t found_pid = 0;
     DIR *dir = opendir("/proc");
     if (dir) {
         struct dirent *ent;
@@ -220,45 +333,20 @@ int tetragon_is_running(void) {
             }
             if (!numeric) continue;
 
-            char path[300];
-            snprintf(path, sizeof(path), "/proc/%s/comm", ent->d_name);
-            FILE *fp = fopen(path, "r");
-            if (fp) {
-                char comm[64] = {0};
-                if (fgets(comm, sizeof(comm), fp)) {
-                    comm[strcspn(comm, "\r\n")] = '\0';
-                    if (strcmp(comm, "tetragon") == 0 || strncmp(comm, "tetragon-", 9) == 0) {
-                        fclose(fp);
-                        closedir(dir);
-                        return 1;
-                    }
-                }
-                fclose(fp);
-            }
-
-            snprintf(path, sizeof(path), "/proc/%s/cmdline", ent->d_name);
-            fp = fopen(path, "rb");
-            if (fp) {
-                char cmd[256] = {0};
-                size_t n = fread(cmd, 1, sizeof(cmd) - 1, fp);
-                fclose(fp);
-                if (n > 0 && mem_contains(cmd, n, "tetragon")) {
-                    closedir(dir);
-                    return 1;
-                }
+            if (pid_is_tetragon(ent->d_name)) {
+                found = 1;
+                found_pid = (pid_t)strtol(ent->d_name, NULL, 10);
+                break;
             }
         }
         closedir(dir);
     }
 
-    FILE *pidfp = fopen("/var/run/tetragon/tetragon.pid", "r");
-    if (pidfp) {
-        long pid = 0;
-        int ok = (fscanf(pidfp, "%ld", &pid) == 1 && pid > 1 && kill((pid_t)pid, 0) == 0);
-        fclose(pidfp);
-        if (ok) return 1;
-    }
-    return 0;
+    g_tg_running_cached = found;
+    g_tg_cached_pid = found_pid;
+    g_tg_running_checked_ms = monotonic_ms_now();
+    pthread_mutex_unlock(&g_tg_running_mutex);
+    return found;
 }
 
 // Classify event severity
@@ -537,6 +625,26 @@ int tetragon_parse_event(struct json_object *json_event, struct security_event *
         parse_parent_fields(process_tp, &event->ppid, event->parent_binary, MAX_FILE_PATH);
     }
 
+    // Process exit event (parsed for stats accounting; not persisted as alert spam)
+    struct json_object *process_exit = NULL;
+    if (event->event_type[0] == '\0' && json_object_object_get_ex(json_event, "process_exit", &process_exit)) {
+        snprintf(event->event_type, sizeof(event->event_type), "%s", EVENT_TYPE_PROCESS_EXIT);
+        struct json_object *process = NULL;
+        if (json_object_object_get_ex(process_exit, "process", &process)) {
+            parse_process_fields(process, &event->pid, &event->uid,
+                                 event->binary_path, MAX_FILE_PATH,
+                                 event->process_name, MAX_PROCESS_NAME,
+                                 event->command, MAX_COMMAND_LINE);
+        }
+        parse_parent_fields(process_exit, &event->ppid, event->parent_binary, MAX_FILE_PATH);
+        event->severity = SEVERITY_INFO;
+        return 0;
+    }
+
+    if (event->event_type[0] == '\0') {
+        return -1;
+    }
+
     if (event->command[0] == '\0' && event->binary_path[0] != '\0') {
         snprintf(event->command, sizeof(event->command), "%.2040s", event->binary_path);
     }
@@ -718,16 +826,25 @@ int tetragon_process_json_line(const char *json_line) {
     
     struct security_event event;
     if (tetragon_parse_event(json_event, &event) == 0) {
+        if (strcmp(event.event_type, EVENT_TYPE_PROCESS_EXIT) == 0) {
+            pthread_mutex_lock(&tetragon_state.stats_mutex);
+            tetragon_state.stats.total_events++;
+            tetragon_state.stats.process_exit_events++;
+            pthread_mutex_unlock(&tetragon_state.stats_mutex);
+            json_object_put(json_event);
+            return 0;
+        }
+
         // Store in database and capture row ID for correlation
         int64_t sec_id = 0;
         tetragon_store_event_ex(&event, &sec_id);
-        
-        // Generate alert if needed
+
+        // Generate alert immediately on warnings/criticals, coalesce INFO WS updates
         if (event.severity >= SEVERITY_WARNING) {
             tetragon_generate_alert(&event);
+            api_security_invalidate_stats_cache();
         } else {
-            // For INFO/low severity events, send a silent update trigger
-            ws_broadcast_message("{\"type\":\"security_update\"}");
+            queue_security_ws_update();
         }
 
         // Auto-correlate host security events with recent XDP network attacks or high-confidence exploits
@@ -800,7 +917,7 @@ void *tetragon_event_monitor_thread(void *arg) {
     (void)arg;
     
     FILE *log_fp = NULL;
-    char line[8192];
+    char line[32768];
     int waited_logged = 0;
     
     printf("INFO: Tetragon event monitor thread started\n");
@@ -858,6 +975,7 @@ void *tetragon_event_monitor_thread(void *arg) {
             }
         }
         clearerr(log_fp);
+        flush_pending_security_ws_update(0);
 
         // Also detect copytruncate rotation cleanly
         struct stat st;

@@ -318,6 +318,9 @@ int database_get_security_stats(struct database *db, time_t from, time_t to,
                                  int *events_blocked);
 
 int database_delete_old_security_events(struct database *db, time_t older_than);
+int database_prune_security_events(struct database *db, int info_retention_sec,
+                                   int alert_retention_sec, int batch_limit);
+void database_checkpoint_wal(struct database *db);
 
 // Attack correlation operations
 int database_insert_attack_correlation(struct database *db, 

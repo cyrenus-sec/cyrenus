@@ -389,16 +389,28 @@ struct MHD_Daemon *start_http_server(
 
     struct MHD_Daemon *daemon = NULL;
     const char *bind_ip = (app_config && app_config->bind_address[0]) ? app_config->bind_address : "0.0.0.0";
+    const unsigned int worker_threads = 4U;
 
     if (strcmp(bind_ip, "0.0.0.0") == 0) {
         daemon = MHD_start_daemon(
-            MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+            MHD_USE_EPOLL_INTERNAL_THREAD | MHD_USE_ERROR_LOG,
             app_config->http_port,
             NULL, NULL,
             &handle_request, NULL,
+            MHD_OPTION_THREAD_POOL_SIZE, worker_threads,
             MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,
             MHD_OPTION_END
         );
+        if (!daemon) {
+            daemon = MHD_start_daemon(
+                MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+                app_config->http_port,
+                NULL, NULL,
+                &handle_request, NULL,
+                MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,
+                MHD_OPTION_END
+            );
+        }
     } else {
         struct in_addr v4;
         struct in6_addr v6;
@@ -408,33 +420,57 @@ struct MHD_Daemon *start_http_server(
             sin.sin_port = htons(app_config->http_port);
             sin.sin_addr = v4;
             daemon = MHD_start_daemon(
-                MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+                MHD_USE_EPOLL_INTERNAL_THREAD | MHD_USE_ERROR_LOG,
                 app_config->http_port,
                 NULL, NULL,
                 &handle_request, NULL,
                 MHD_OPTION_SOCK_ADDR, (struct sockaddr *)&sin,
+                MHD_OPTION_THREAD_POOL_SIZE, worker_threads,
                 MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,
                 MHD_OPTION_END
             );
+            if (!daemon) {
+                daemon = MHD_start_daemon(
+                    MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+                    app_config->http_port,
+                    NULL, NULL,
+                    &handle_request, NULL,
+                    MHD_OPTION_SOCK_ADDR, (struct sockaddr *)&sin,
+                    MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,
+                    MHD_OPTION_END
+                );
+            }
         } else if (inet_pton(AF_INET6, bind_ip, &v6) == 1) {
             struct sockaddr_in6 sin6 = {0};
             sin6.sin6_family = AF_INET6;
             sin6.sin6_port = htons(app_config->http_port);
             sin6.sin6_addr = v6;
             daemon = MHD_start_daemon(
-                MHD_USE_IPv6 | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+                MHD_USE_IPv6 | MHD_USE_EPOLL_INTERNAL_THREAD | MHD_USE_ERROR_LOG,
                 app_config->http_port,
                 NULL, NULL,
                 &handle_request, NULL,
                 MHD_OPTION_SOCK_ADDR, (struct sockaddr *)&sin6,
+                MHD_OPTION_THREAD_POOL_SIZE, worker_threads,
                 MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,
                 MHD_OPTION_END
             );
+            if (!daemon) {
+                daemon = MHD_start_daemon(
+                    MHD_USE_IPv6 | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG,
+                    app_config->http_port,
+                    NULL, NULL,
+                    &handle_request, NULL,
+                    MHD_OPTION_SOCK_ADDR, (struct sockaddr *)&sin6,
+                    MHD_OPTION_NOTIFY_COMPLETED, request_completed, NULL,
+                    MHD_OPTION_END
+                );
+            }
         }
     }
 
     if (daemon) {
-        printf("HTTP server started on %s:%d\n", bind_ip, app_config->http_port);
+        printf("HTTP server started on %s:%d (thread pool: %u)\n", bind_ip, app_config->http_port, worker_threads);
     } else {
         fprintf(stderr, "Failed to start HTTP server on %s:%d\n", bind_ip, app_config->http_port);
     }
