@@ -1,0 +1,138 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build (defaults to ref_name)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            llvm \
+            libelf-dev \
+            libbpf-dev \
+            libmicrohttpd-dev \
+            libconfig-dev \
+            libjson-c-dev \
+            libcurl4-openssl-dev \
+            libwebsockets-dev \
+            libssl-dev \
+            libsqlcipher-dev \
+            libmaxminddb-dev \
+            uuid-dev \
+            zlib1g-dev \
+            pkg-config \
+            xxd
+
+      - name: Determine release version
+        id: meta
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG="${INPUT_TAG:-$REF_NAME}"
+          if [[ ! "$TAG" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+            echo "Invalid release tag: $TAG" >&2
+            exit 1
+          fi
+          if [ -n "$INPUT_TAG" ]; then
+            git fetch --tags --force
+            git checkout --detach "refs/tags/${TAG}"
+          fi
+          echo "version=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build frontend, eBPF, and Cyrenus binary
+        run: |
+          chmod +x web/build.sh
+          make clean
+          make all
+
+      - name: Run build smoke checks
+        run: |
+          bash -n install.sh install-binary.sh create-release.sh uninstall.sh web/build.sh
+          ./build/cyrenus --version
+          ./build/cyrenus --help >/dev/null
+          llvm-objdump --section-headers build/xdp_prog.o >/dev/null
+
+      - name: Package release archive
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}" make release
+          ls -lh releases/
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cyrenus-linux-${{ matrix.arch }}
+          path: |
+            releases/*.tar.gz
+            releases/*.tar.gz.sha256
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.tag != ''
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-assets
+          merge-multiple: true
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="${INPUT_TAG:-$REF_NAME}"
+          shopt -s nullglob
+          ASSETS=(dist-assets/*.tar.gz dist-assets/*.tar.gz.sha256)
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "No release assets found" >&2
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber --repo "$REPO"
+          else
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --title "Cyrenus $TAG" \
+              --generate-notes \
+              --repo "$REPO"
+          fi

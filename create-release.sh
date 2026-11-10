@@ -4,7 +4,7 @@
 
 set -e
 
-VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "v1.0.0")
+VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "v1.0.0")}"
 ARCH_RAW=$(uname -m)
 case "$ARCH_RAW" in
     x86_64) RELEASE_ARCH="amd64" ;;
@@ -15,14 +15,18 @@ RELEASE_NAME="cyrenus-${VERSION}-linux-${RELEASE_ARCH}"
 
 echo "Creating release: $RELEASE_NAME"
 
+if [ ! -x build/cyrenus ] || [ ! -f build/xdp_prog.o ]; then
+    echo "ERROR: build/cyrenus or build/xdp_prog.o missing. Run 'make' first." >&2
+    exit 1
+fi
+
 # Create releases directory
 mkdir -p releases
 
-# Create tarball directly without intermediate directory
+# Create tarball with directory wrapper matching 'make release' and install-binary.sh
 echo "Creating tarball..."
 tar -czf "releases/${RELEASE_NAME}.tar.gz" \
-    --transform="s,^build/cyrenus,cyrenus," \
-    --transform="s,^build/xdp_prog.o,xdp_prog.o," \
+    --transform="s,^build/,${RELEASE_NAME}/," \
     build/cyrenus \
     build/xdp_prog.o
 

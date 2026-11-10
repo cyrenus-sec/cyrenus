@@ -26,7 +26,7 @@ cat <<"EOF"
   / ___|   _  _ __  _ __  _ __   _   _ ___  
  | |  | | | || '__/ / _ \| '_ \ | | | / __| 
  | |__| |_| || |  |  __/ | | | || |_| \__ \ 
-  \____\__, ||_|   \___| |_| |_| \__,_|___/ v.0.1
+  \____\__, ||_|   \___| |_| |_| \__,_|___/ v2.0.0
        |___/                                
   
   DDoS Protection System - Binary Installation
@@ -74,6 +74,33 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Check kernel version (eBPF XDP requires >= 5.8)
+check_kernel_version() {
+    echo -e "${BLUE}Checking kernel version...${NC}"
+    local major minor
+    IFS='.' read -r major minor _ <<< "$(uname -r)"
+    minor="${minor%%[^0-9]*}"
+    if [ -n "$major" ] && [ -n "$minor" ] && { [ "$major" -gt 5 ] || { [ "$major" -eq 5 ] && [ "$minor" -ge 8 ]; }; }; then
+        echo -e "${GREEN}✓ Kernel version ${major}.${minor} is supported${NC}\n"
+    else
+        echo -e "${RED}✗ Kernel version $(uname -r) is too old (requires >= 5.8)${NC}"
+        exit 1
+    fi
+}
+
+# Resolve first available Debian/Ubuntu package name among SONAME alternatives
+resolve_deb_pkg() {
+    local pkg candidate
+    for pkg in "$@"; do
+        candidate=$(LC_ALL=C apt-cache policy "$pkg" 2>/dev/null | awk '/Candidate:/ {print $2}' || true)
+        if [ -n "$candidate" ] && [ "$candidate" != "(none)" ]; then
+            echo "$pkg"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Install minimal runtime dependencies
 install_runtime_deps() {
     echo -e "${BLUE}Installing runtime dependencies...${NC}\n"
@@ -81,33 +108,90 @@ install_runtime_deps() {
     case $OS in
         ubuntu|debian)
             apt-get update
-            apt-get install -y curl ca-certificates
+            local deb_pkgs=(curl ca-certificates tar iproute2 openssl)
+            local spec pkg
+            for spec in \
+                "libelf1t64 libelf1" \
+                "libbpf1 libbpf0" \
+                "libmicrohttpd12t64 libmicrohttpd12" \
+                "libconfig9 libconfig11" \
+                "libjson-c5 libjson-c4" \
+                "libcurl4t64 libcurl4" \
+                "libwebsockets19t64 libwebsockets17 libwebsockets16" \
+                "libssl3t64 libssl3" \
+                "libsqlcipher1 libsqlcipher0" \
+                "libmaxminddb0" \
+                "libuuid1" \
+                "zlib1g"; do
+                # shellcheck disable=SC2086
+                if pkg=$(resolve_deb_pkg $spec); then
+                    deb_pkgs+=("$pkg")
+                fi
+            done
+            DEBIAN_FRONTEND=noninteractive apt-get install -y "${deb_pkgs[@]}"
             ;;
         fedora|rhel|centos)
-            dnf install -y curl ca-certificates
+            dnf install -y \
+                curl \
+                ca-certificates \
+                tar \
+                iproute \
+                openssl \
+                elfutils-libelf \
+                libbpf \
+                libmicrohttpd \
+                libconfig \
+                json-c \
+                libcurl \
+                libwebsockets \
+                sqlcipher \
+                libmaxminddb \
+                libuuid \
+                zlib
             ;;
         arch)
-            pacman -Sy --noconfirm curl ca-certificates
+            pacman -Sy --noconfirm \
+                curl \
+                ca-certificates \
+                tar \
+                iproute2 \
+                openssl \
+                libelf \
+                libbpf \
+                libmicrohttpd \
+                libconfig \
+                json-c \
+                libwebsockets \
+                sqlcipher \
+                libmaxminddb \
+                util-linux-libs \
+                zlib
             ;;
         *)
-            echo -e "${YELLOW}Unknown distribution, skipping dependency installation${NC}"
+            echo -e "${YELLOW}Unknown distribution ($OS), skipping dependency installation${NC}"
             ;;
     esac
     
     echo -e "${GREEN}✓ Dependencies installed${NC}"
 }
 
-# Get latest release version
+# Get release version (supports CYRENUS_VERSION env override)
 get_latest_release() {
+    if [ -n "${CYRENUS_VERSION:-}" ]; then
+        LATEST="$CYRENUS_VERSION"
+        echo -e "${GREEN}Using requested version: $LATEST${NC}"
+        return
+    fi
+
     echo -e "${BLUE}Fetching latest release...${NC}"
     
     # Try to get latest release from GitHub API
     if command_exists curl; then
-        LATEST=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        LATEST=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep -m1 '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
         
         if [ -z "$LATEST" ]; then
-            # Fallback to v1.0.0 if API fails
-            LATEST="v1.0.0"
+            # Fallback to current release if API fails or is rate-limited
+            LATEST="v2.0.0"
             echo -e "${YELLOW}Could not fetch latest release, using default: $LATEST${NC}"
         else
             echo -e "${GREEN}Latest version: $LATEST${NC}"
@@ -118,30 +202,51 @@ get_latest_release() {
     fi
 }
 
-# Download binaries
+# Download and extract release archive
 download_binaries() {
     echo -e "\n${BLUE}Downloading Cyrenus binaries...${NC}"
     
-    DOWNLOAD_URL="https://github.com/$REPO/releases/download/$LATEST/cyrenus-${LATEST}-linux-${ARCH_SUFFIX}.tar.gz"
+    ARCHIVE_NAME="cyrenus-${LATEST}-linux-${ARCH_SUFFIX}.tar.gz"
+    DOWNLOAD_URL="https://github.com/$REPO/releases/download/$LATEST/$ARCHIVE_NAME"
     
-    # Create temporary directory
+    # Create temporary directory with automatic cleanup
     TMP_DIR=$(mktemp -d)
-    cd "$TMP_DIR"
+    trap 'rm -rf "${TMP_DIR:-}"' EXIT
     
     echo "Downloading from: $DOWNLOAD_URL"
     
-    if curl -L -f -o cyrenus.tar.gz "$DOWNLOAD_URL"; then
+    if curl -fL -o "$TMP_DIR/$ARCHIVE_NAME" "$DOWNLOAD_URL"; then
         echo -e "${GREEN}✓ Download complete${NC}"
     else
         echo -e "${RED}Failed to download binaries${NC}"
         echo -e "${YELLOW}The release might not exist yet. Please build from source using ./install.sh${NC}"
-        rm -rf "$TMP_DIR"
         exit 1
     fi
     
-    # Extract
+    # Verify SHA256 checksum if published alongside the tarball
+    if curl -fsSL -o "$TMP_DIR/${ARCHIVE_NAME}.sha256" "${DOWNLOAD_URL}.sha256" 2>/dev/null; then
+        if (cd "$TMP_DIR" && sha256sum -c "${ARCHIVE_NAME}.sha256"); then
+            echo -e "${GREEN}✓ Checksum verified${NC}"
+        else
+            echo -e "${RED}SHA256 checksum verification failed!${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${YELLOW}⚠ No .sha256 checksum file found for $ARCHIVE_NAME; skipping verification${NC}"
+    fi
+    
+    # Extract safely regardless of whether the archive wraps a subdirectory or is flat
     echo "Extracting files..."
-    tar -xzf cyrenus.tar.gz --strip-components=1
+    mkdir -p "$TMP_DIR/extract"
+    tar -xzf "$TMP_DIR/$ARCHIVE_NAME" -C "$TMP_DIR/extract"
+    
+    BIN_CYRENUS=$(find "$TMP_DIR/extract" -maxdepth 2 -type f -name cyrenus | head -n1)
+    OBJ_XDP=$(find "$TMP_DIR/extract" -maxdepth 2 -type f -name xdp_prog.o | head -n1)
+    
+    if [ -z "$BIN_CYRENUS" ] || [ -z "$OBJ_XDP" ]; then
+        echo -e "${RED}Error: Downloaded archive does not contain 'cyrenus' and 'xdp_prog.o'${NC}"
+        exit 1
+    fi
     
     echo -e "${GREEN}✓ Files extracted${NC}"
 }
@@ -150,12 +255,24 @@ download_binaries() {
 install_binaries() {
     echo -e "\n${BLUE}Installing binaries...${NC}"
     
+    # Verify binary links against this host's shared libraries before replacing system files
+    chmod +x "$BIN_CYRENUS"
+    if ! "$BIN_CYRENUS" --version >/dev/null 2>&1; then
+        echo -e "${RED}Error: Pre-built binary is incompatible with this host's shared libraries or glibc.${NC}"
+        echo -e "${YELLOW}Details:${NC}"
+        ldd "$BIN_CYRENUS" 2>&1 | grep -E "not found|version" || "$BIN_CYRENUS" --version 2>&1 || true
+        echo -e "${YELLOW}Please build from source for this OS/distro using: sudo ./install.sh${NC}"
+        exit 1
+    fi
+    
+    mkdir -p "$INSTALL_DIR" "$LIB_DIR"
+    
     # Install main binary
-    install -m 755 cyrenus "$INSTALL_DIR/cyrenus"
-    echo "Installed: $INSTALL_DIR/cyrenus"
+    install -m 755 "$BIN_CYRENUS" "$INSTALL_DIR/cyrenus"
+    echo "Installed: $INSTALL_DIR/cyrenus ($("$INSTALL_DIR/cyrenus" --version | head -n1))"
     
     # Install eBPF object
-    install -m 644 xdp_prog.o "$LIB_DIR/cyrenus_xdp_prog.o"
+    install -m 644 "$OBJ_XDP" "$LIB_DIR/cyrenus_xdp_prog.o"
     echo "Installed: $LIB_DIR/cyrenus_xdp_prog.o"
     
     echo -e "${GREEN}✓ Binaries installed${NC}"
@@ -172,8 +289,15 @@ configure_system() {
     
     read -p "Enter network interface to monitor [auto-detect]: " INTERFACE </dev/tty
     if [ -z "$INTERFACE" ]; then
-        INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
+        INTERFACE=$(ip route | awk '/^default/ {print $5; exit}')
+        if [ -z "$INTERFACE" ]; then
+            INTERFACE=$(ip -o link show up | awk -F': ' '$2 != "lo" {sub(/@.*/, "", $2); print $2; exit}')
+        fi
         echo "Auto-detected: $INTERFACE"
+    fi
+    if [ -z "$INTERFACE" ]; then
+        echo -e "${RED}Error: Could not auto-detect an active network interface${NC}"
+        exit 1
     fi
     
     read -p "Enter HTTP API port [8181]: " HTTP_PORT </dev/tty
@@ -188,6 +312,10 @@ configure_system() {
     read -s -p "Confirm admin password: " PASSWORD_CONFIRM </dev/tty
     echo ""
     
+    if [ -z "$PASSWORD" ]; then
+        echo -e "${RED}Password cannot be empty!${NC}"
+        exit 1
+    fi
     if [ "$PASSWORD" != "$PASSWORD_CONFIRM" ]; then
         echo -e "${RED}Passwords do not match!${NC}"
         exit 1
@@ -205,9 +333,8 @@ create_config_files() {
     echo -e "\n${BLUE}Creating configuration files...${NC}"
     
     # Create directories
-    mkdir -p "$CONFIG_DIR"
-    mkdir -p "$DATA_DIR"
-    mkdir -p /etc/tetragon/policies
+    mkdir -p "$CONFIG_DIR" "$DATA_DIR" /etc/tetragon/policies /var/log/tetragon
+    chmod 755 "$DATA_DIR" /etc/tetragon /etc/tetragon/policies /var/log/tetragon
     
     # Create main configuration file
     cat > "$CONFIG_DIR/cyrenus.conf" <<EOF
@@ -238,7 +365,7 @@ database = {
     encrypted = true;
 };
 
-# GeoIP settings  
+# GeoIP settings
 geoip = {
     database_path = "$DATA_DIR/GeoLite2-Country.mmdb";
     auto_update = true;
@@ -261,12 +388,23 @@ notifications = {
 
 # Attack detection thresholds
 detection = {
-    syn_flood_threshold = 1000;      # packets per second
-    udp_flood_threshold = 5000;      # packets per second
-    dns_amplification_ratio = 10.0;  # response/request size ratio
-    auto_blacklist_threshold = 3;    # number of attacks before auto-block
+    syn_flood_rate = 500;
+    synack_flood_rate = 1000;
+    rst_flood_rate = 500;
+    ack_flood_rate = 2500;
+    udp_flood_rate = 5000;
+    icmp_flood_rate = 100;
+    dns_amp_rate = 200;
+    max_frags = 15;
+    max_dns_response_size = 2048;
+    global_syn_rate = 5000;
+    global_udp_rate = 25000;
+    auto_block_enabled = 1;
+    auto_block_duration_sec = 300;
 };
 EOF
+
+    chmod 600 "$CONFIG_DIR/cyrenus.conf"
 
     # Create database encryption key file
     echo "$DB_KEY" > "$CONFIG_DIR/master.key"
@@ -282,7 +420,7 @@ download_geoip() {
     GEOIP_URL="https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb"
     GEOIP_PATH="$DATA_DIR/GeoLite2-Country.mmdb"
     
-    if curl -L -o "$GEOIP_PATH" "$GEOIP_URL"; then
+    if curl -fsSL -o "$GEOIP_PATH" "$GEOIP_URL"; then
         echo -e "${GREEN}✓ GeoIP database downloaded${NC}"
     else
         echo -e "${YELLOW}⚠ Failed to download GeoIP database${NC}"
@@ -313,7 +451,7 @@ PrivateTmp=true
 NoNewPrivileges=false
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=$DATA_DIR
+ReadWritePaths=$DATA_DIR /etc/tetragon /etc/tetragon/policies
 
 [Install]
 WantedBy=multi-user.target
@@ -358,6 +496,7 @@ print_instructions() {
 
 # Main installation flow
 main() {
+    check_kernel_version
     install_runtime_deps
     get_latest_release
     download_binaries
@@ -366,10 +505,6 @@ main() {
     create_config_files
     download_geoip
     create_service
-    
-    # Cleanup
-    cd /
-    rm -rf "$TMP_DIR"
     
     print_instructions
 }
